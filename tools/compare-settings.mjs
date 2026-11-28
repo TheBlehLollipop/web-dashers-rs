@@ -4,6 +4,8 @@ import { makeRecorder } from "./sprite-ref.mjs";
 const root = new URL("..", import.meta.url).pathname;
 const { H, ctx, scene } = await makeRecorder();
 const w = H.w;
+import vm from "node:vm";
+vm.runInContext("window.LevelObject.prototype._initGenericTriggers = function () {};", ctx);
 const files = fs.readdirSync(root + "ref/assets/levels").filter((f) => f.endsWith(".txt")).sort();
 const enc = new TextEncoder();
 let bad = 0;

@@ -22,6 +22,10 @@ pub fn object_from_id(id: i64) -> Option<&'static ObjectDef> {
     OBJECTS.binary_search_by_key(&(id as u32), |e| e.0).ok().map(|i| &OBJECTS[i].1)
 }
 
+pub fn is_trigger_branch(id: i64) -> bool {
+    matches!(object_from_id(id), Some(d) if d.ty == Some("trigger")) && !matches!(id, 1813 | 2069 | 3645)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SlopeData { pub gw: f64, pub gh: f64, pub angle: f64, pub sq: bool }
 

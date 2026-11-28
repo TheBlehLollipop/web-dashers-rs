@@ -260,6 +260,7 @@ impl Game {
     /// `_applyGroupedSpriteTransform`
     pub(crate) fn apply_sprite_transform(&mut self, si: usize) {
         if !self.fx.sprites[si].active { return; }
+        self.fx.sprites[si].set_flag("_eeXformDirty", false);
         let ids = std::mem::take(&mut self.fx.ids[si]); // put back below: no copy per sprite per frame
         let (initial_x, initial_y, init_rot, vis_x0, vis_y0, beast) = {
             let s = &self.fx.sprites[si];
@@ -338,7 +339,11 @@ impl Game {
         for g in groups {
             if let Some(list) = self.trig.group_anchors.get(g) { for &si in list { if seen.insert(si) { order.push(si); } } }
         }
-        for si in order { self.apply_sprite_transform(si); }
+        let lazy = !self.ldm && self.fx.vis_min >= 0;
+        for si in order {
+            if lazy && self.skip_far_sprite_transform(si) { continue; }
+            self.apply_sprite_transform(si);
+        }
     }
 
     /// the sprite half of `resetMoveTriggers`
@@ -358,6 +363,8 @@ impl Game {
             self.refresh_sprite_section(si);
         }
     }
+
+    pub(crate) fn sprite_reset_group_scales(&mut self) {}
 
     /// the sprite half of `resetRotateTriggers`
     pub(crate) fn sprite_reset_rotate(&mut self) {
@@ -388,8 +395,56 @@ impl Game {
         let last = (self.fx.container_len - 1) as f64;
         let lo = 0f64.max(((camera_x - 200.0) / 400.0).floor());
         let hi = last.min(((camera_x + self.screen_width + 200.0) / 400.0).floor());
-        self.fx.vis_min = lo as i64;
-        self.fx.vis_max = hi as i64;
+        let (old_lo, old_hi) = (self.fx.vis_min, self.fx.vis_max);
+        let (lo, hi) = (lo as i64, hi as i64);
+        let mut shown: Vec<i64> = Vec::new();
+        if old_lo < 0 {
+            shown.extend(lo..=hi);
+        } else if lo != old_lo || hi != old_hi {
+            if lo < old_lo { shown.extend(lo..=(old_lo - 1).min(hi)); }
+            if hi > old_hi { shown.extend((old_hi + 1).max(lo)..=hi); }
+        }
+        self.fx.vis_min = lo;
+        self.fx.vis_max = hi;
+        for sec in shown { self.apply_stale_section(sec); }
+    }
+
+    fn apply_stale_section(&mut self, sec: i64) {
+        if sec < 0 { return; }
+        let Some(list) = self.fx.sections.get(&(sec as u64)) else { return };
+        let stale: Vec<usize> = list.iter().copied().filter(|&si| self.fx.sprites[si].flag("_eeXformDirty")).collect();
+        for si in stale { self.apply_sprite_transform(si); }
+    }
+
+    fn skip_far_sprite_transform(&mut self, si: usize) -> bool {
+        let (lo, hi) = (self.fx.vis_min - 1, self.fx.vis_max + 1);
+        let (x0, y0, cur) = {
+            let s = &self.fx.sprites[si];
+            if !s.active || s.flag("_beastManaged") || s.num("_coinWorldX").is_some() { return false; }
+            let cur = match s.num("_eeSectionIndex") { Some(c) if c.is_finite() && c.fract() == 0.0 => c as i64, _ => return false };
+            if cur >= lo && cur <= hi { return false; }
+            (s.num("_eeInitialWorldX").or_else(|| s.num("_origWorldX")).unwrap_or(s.x), s.num("_eeInitialBaseY").or_else(|| s.num("_origBaseY")).unwrap_or(s.y), cur)
+        };
+        let ids = self.fx.ids[si].clone();
+        let (mut x, mut y) = (x0, y0);
+        for g in &ids { if let Some(off) = self.trig.offsets.get(g) { x += or0(off.0); y += or0(off.1); } }
+        for g in &ids {
+            let Some(rd) = self.trig.rotations.get(g).cloned() else { continue };
+            if rd.total_rad == 0.0 || !(rd.center > 0) { continue; }
+            let (cx, cy) = self.center_cached(rd.center);
+            let (dx, dy) = (x - cx, y - cy);
+            let (c, sn) = (crate::jsmath::cos(rd.total_rad), crate::jsmath::sin(rd.total_rad));
+            x = cx + dx * c - dy * sn;
+            y = cy + dx * sn + dy * c;
+        }
+        let sec = section_index(x) as i64;
+        if sec >= lo && sec <= hi { return false; }
+        let s = &mut self.fx.sprites[si];
+        s.set_flag("_eeXformDirty", true);
+        s.set_num("_eeWorldX", x);
+        s.set_num("_eeBaseY", y);
+        if sec != cur { self.refresh_sprite_section(si); }
+        true
     }
 
     /// `_cullEmitters`
@@ -902,6 +957,11 @@ impl Game {
         buf[30] = self.e.player_world_x / if self.end_x_pos > 0.0 { self.end_x_pos } else { 1.0 };
         buf[31] = self.trig.shake_off.0; buf[32] = self.trig.shake_off.1;
         if self.fx.editor_mode { buf[33] = self.fx.ed_cam.2; buf[34] = self.fx.ed_cam.0; buf[35] = self.fx.ed_cam.1; }
+        else {
+            let z = self.trig.gen.zoom;
+            buf[38] = if z == 0.0 || z.is_nan() { 1.0 } else { z };
+            buf[39] = if self.trig.gen.angle.is_nan() { 0.0 } else { self.trig.gen.angle };
+        }
         buf[36] = self.mirror_progress(); buf[37] = self.p.mirrored as u8 as f64;
         buf.extend_from_slice(&gf.tile_x);
         for (top, _, _, si) in order {

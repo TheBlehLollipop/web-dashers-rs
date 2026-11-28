@@ -11,6 +11,9 @@ const lv = fs.readFileSync(root + "ref/assets/scripts/core/level.js", "utf8");
 const a = lv.indexOf("const allObjects = window.allobjects();");
 const b = lv.indexOf("const GD_SPEED_PIXELS_PER_SECOND");
 vm.runInContext(lv.slice(a, b) + "\nthis.allObjects = allObjects;", ctx);
+const lt = fs.readFileSync(root + "ref/assets/scripts/core/level-triggers.js", "utf8");
+vm.runInContext("var triggerType = 'trigger'; window.LevelObject = { prototype: {} };\n" + lt.slice(0, lt.indexOf("  const rawValue")) + "})();", ctx);
+ctx.allObjects[2065].type = "deco"; ctx.allObjects[2065].children = [];
 
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? (Number.isInteger(v) && Math.abs(v) < 1e15 ? v.toFixed(1) : String(v)) : "f64::NAN");
 const opt = (v) => (typeof v === "number" && Number.isFinite(v) ? `Some(${num(v)})` : "None");
@@ -45,6 +48,6 @@ console.log(Object.keys(sd).length, "slope entries,", ranges.length, "deco range
 // The full definitions (frames, children, glow, colours...) for the visual side
 fs.mkdirSync(root + "crates/wd-core/data", { recursive: true });
 const b2 = lv.indexOf("window._animatedSprites = [];");
-vm.runInContext("var allObjects2 = (function(){ " + lv.slice(a, b2).replace(/^const allObjects = /m, "const allObjects = ") + "\n return allObjects; })()", ctx);
+vm.runInContext("var allObjects2 = (function(){ " + lv.slice(a, b2).replace(/^const allObjects = /m, "const allObjects = ") + "\n" + lt.slice(0, lt.indexOf("  const rawValue")).replace("(() => {", "") + "\n if (allObjects[2065]) { allObjects[2065].type = 'deco'; allObjects[2065].children = []; }\n return allObjects; })()", ctx);
 fs.writeFileSync(root + "crates/wd-core/data/objects_full.json", JSON.stringify(ctx.allObjects2));
 console.log("objects_full.json written");

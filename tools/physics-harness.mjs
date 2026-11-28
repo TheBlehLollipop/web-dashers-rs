@@ -44,6 +44,7 @@ this.spawnCol = function (levelObj, objectDef, worldX, worldY, objectId, linkedO
 this.tpOffset = ({ ${src.slice(tp, tpEnd).trim()} })._getTeleportPortalYOffset;
 `, ctx);
   vm.runInContext(src.slice(src.indexOf("window.LevelObject = class LevelObject")), ctx);
+  for (const f of ["level-triggers", "level-shaders", "level-particles", "level-areas", "level-advanced", "level-channels", "level-gradients"]) vm.runInContext(read(`core/${f}.js`), ctx);
   // player.js (re-declares nothing from level.js)
   vm.runInContext(read("core/player.js") + "\nthis.PlayerObject = PlayerObject; this.PlayerState = PlayerState;", ctx);
   // the physics step of game-scene.js, taken verbatim
@@ -56,8 +57,8 @@ this.tpOffset = ({ ${src.slice(tp, tpEnd).trim()} })._getTeleportPortalYOffset;
   const uBody = tr0 > 0 && tr0 < u1 ? gs.slice(u0, tr0) + gs.slice(tr1, u1) : gs.slice(u0, u1);
   const e0 = gs.indexOf("  _getDualSharedSignature(state) {"), e1 = gs.indexOf("  _getMirrorXOffset(xOffset)"), f0 = gs.indexOf("  _enableDualMode(portal = null) {"), f1 = gs.indexOf("  _triggerEndPortal() {");
   const led = read("core/level-editor.js"), l0 = led.indexOf("  _applyLevelStartOptions() {"), l1 = led.indexOf("  _closeEditorStartOptionsPopup() {");
-  const c0 = gs.indexOf("  _updateCameraY("), c1 = gs.indexOf("  _quantizeDelta(");
-  const k0 = gs.indexOf("    if (!this._endCameraOverride) {\n      const cameraOffsetX = this._playerWorldX - centerX;"), k1 = gs.indexOf("    this._level.additiveContainer.x = -this._cameraX", k0);
+  const c0 = Math.min(gs.indexOf("  _applyCameraEdges() {"), gs.indexOf("  _updateCameraY(")), c1 = gs.indexOf("  _quantizeDelta(");
+  const k0 = gs.indexOf("    if (!this._endCameraOverride) {\n      const cameraOffsetX = this._playerWorldX - centerX"), k1 = gs.indexOf("    this._level.additiveContainer.x = -this._cameraX", k0);
   const w0 = gs.indexOf("    if (!this._levelWon && !this._state.isDead && this._level.endXPos > 0) {"), w1 = gs.indexOf("    if (this._levelWon) {", w0);
   const r0 = gs.indexOf("  _respawnFromCheckpoint() {"), r1 = gs.indexOf("  _createMirroredBackgroundTexture(");
   const pm0 = gs.indexOf("class PracticeMode {"), pm1 = gs.indexOf("class MacroBot {");
@@ -89,17 +90,17 @@ this.tpOffset = ({ ${src.slice(tp, tpEnd).trim()} })._getTeleportPortalYOffset;
     slope_riding: ["o", "_slopeRiding"], slope_exit_grace: ["o", "_slopeExitGrace"], slope_entry_x: ["o", "_slopeEntryX"],
     last_land_object: ["o", "_lastLandObject"], last_x_offset: ["o", "_lastXOffset"], ignore_teleport_until_clear: ["o", "_ignoreTeleportUntilClear"],
     nc_total_frames: ["nc", "totalFrames"], nc_death_frames: ["nc", "deathFrames"], nc_deaths: ["nc", "deaths"], nc_accuracy: ["nc", "accuracy"],
-    last_blue_pad_tick: ["p", "_lastBluePadTick"], robot_hold_timer: ["p", "_robotHoldTimer"], spider_orb_hold: ["p", "_spiderOrbHold"], spider_teleport_pending: ["p", "_spiderTeleportPending"], spider_teleport_noclip_death_pending: ["p", "_spiderTeleportNoclipDeathPending"],
+    last_blue_pad_tick: ["p", "_lastBluePadTick"], robot_hold_timer: ["p", "_robotHoldTimer"], spider_teleport_pending: ["p", "_spiderTeleportPending"], spider_teleport_noclip_death_pending: ["p", "_spiderTeleportNoclipDeathPending"],
     spider_teleport_anim_timer: ["p", "_spiderTeleportAnimTimer"], spider_flash_timer: ["p", "_spiderFlashTimer"], spider_flash_duration: ["p", "_spiderFlashDuration"],
     gd_last_slope_obj: ["o", "_gdLastSlopeObj"], gd_last_slope_top: ["o", "_gdLastSlopeTop"], gd_last_slope_y_pos: ["o", "_gdLastSlopeYPos"],
     gd_last_slope_steepness: ["o", "_gdLastSlopeSteepness"], gd_last_slope_up: ["o", "_gdLastSlopeUp"], gd_slope_rotation: ["o", "_gdSlopeRotation"],
     last_land_x: ["derived"], last_land_y: ["derived"], last_land_ty: ["derived"],
-    swing_flip_pending: ["p", "_swingFlipPending"], spider_orb_input_locked: ["p", "_spiderOrbInputLocked"],
+    press_count: ["p", "_pressCount"], gd_fall_start_y: ["p", "_gdFallStartY"], gd_land_flag: ["p", "_gdLandFlag"], gd_prev_fall_vel: ["p", "_gdPrevFallVel"], gd_was_falling: ["p", "_gdWasFalling"], gd_prev_held: ["p", "_gdPrevHeld"], gd_prev_ceiling: ["p", "_gdPrevCeiling"], force_acc_x: ["derived"], force_acc_y: ["derived"],
     ship_head_uid: ["derived"], ship_head_flipped: ["derived"], prev_ship_head_uid: ["derived"], prev_ship_head_flipped: ["derived"],
   };
   const uidFields = new Set(["active_slope_obj", "prev_slope_obj", "last_land_object", "gd_last_slope_obj"]);
   const noneValue = { pending_velocity: null, slope_exit_vel: null, on_slope_angle: null, gd_flip_tick: undefined, active_slope_obj: null, active_slope_angle: null,
-    gd_mode_sig: undefined, gd_mode_tick: undefined, last_collision_world_x: undefined, last_collision_world_y: undefined, last_blue_pad_tick: undefined, gd_last_slope_obj: undefined, gd_last_slope_top: undefined, gd_last_slope_y_pos: undefined, gd_last_slope_up: undefined, prev_slope_obj: null, slope_entry_x: undefined, last_land_object: null };
+    gd_mode_sig: undefined, gd_mode_tick: undefined, last_collision_world_x: undefined, last_collision_world_y: undefined, last_blue_pad_tick: undefined, gd_last_slope_obj: undefined, gd_last_slope_top: undefined, gd_last_slope_y_pos: undefined, gd_last_slope_up: undefined, prev_slope_obj: null, slope_entry_x: undefined, last_land_object: null, press_count: undefined, gd_fall_start_y: null };
   const playerFields = layout.filter((f) => !f.name.includes("."));
   const loc = (name) => special[name] || ["p", camel(name)];
 
@@ -108,6 +109,8 @@ this.tpOffset = ({ ${src.slice(tp, tpEnd).trim()} })._getTeleportPortalYOffset;
     ty: (c) => TYPES.indexOf(c.type), x: (c) => c.x, y: (c) => c.y, w: (c) => c.w, h: (c) => c.h, rotation_degrees: (c) => c.rotationDegrees,
     hitbox_radius: (c) => c.hitbox_radius, act_main: (c) => !!c._activatedByPlayer?.main, act_dual: (c) => !!c._activatedByPlayer?.dual, activated: (c) => !!c.activated,
     objid: (c) => c.objid, uid: (c) => c.uid, id: (c) => c.padId ?? c.orbId ?? c.speedId ?? c.coinId, multi_activate: (c) => !!c.multiActivate,
+    claim_touch: (c) => !!c.claimTouch, ee_toggle_press: (c) => c._eeTogglePress, force: (c) => c.force ?? 0, force_min: (c) => c.forceMin ?? 0, force_max: (c) => c.forceMax ?? 0,
+    force_radial: (c) => !!c.forceRadial, force_range: (c) => !!c.forceRange, force_id: (c) => c.forceId ?? 0, force_flip_y: (c) => !!c.forceFlipY,
     free_mode: (c) => !!c.freeMode, flip_y: (c) => !!c.flipY, orb_rotation: (c) => c.orbRotation ?? 0, speed_value: (c) => c.speedValue, teleport_target_x: (c) => c.teleportTargetX, teleport_target_y: (c) => c.teleportTargetY,
     portal_x: (c) => c.portalX, portal_y: (c) => c.portalY, dash_hold_main: (c) => c._dashHoldTicksByPlayer?.main ?? 0, dash_hold_dual: (c) => c._dashHoldTicksByPlayer?.dual ?? 0,
     slope_angle_deg: (c) => c.slopeAngleDeg, slope_dir: (c) => c.slopeDir, slope_is_filled: (c) => !!c.slopeIsFilled, slope_flip_y: (c) => !!c.slopeFlipY,
@@ -141,10 +144,11 @@ this.tpOffset = ({ ${src.slice(tp, tpEnd).trim()} })._getTeleportPortalYOffset;
     o.__log = [];
     const setHead = (key, uid, flipped) => { o[key] = Number.isNaN(uid) ? null : { obj: byUid.get(uid) || { ...dummy(vals.last_land_ty, vals.last_land_x, vals.last_land_y), uid }, gravityFlipped: flipped !== 0 }; };
     setHead("_shipHeadSlopeContact", vals.ship_head_uid, vals.ship_head_flipped); setHead("_prevShipHeadSlopeContact", vals.prev_ship_head_uid, vals.prev_ship_head_flipped);
+    o._forceAccum = { x: vals.force_acc_x, y: vals.force_acc_y };
     const second = vals["e.second_player"] !== 0;
     const anyStub = new Proxy(function () {}, { get: (_, k) => (k === Symbol.toPrimitive ? () => 0 : anyStub), apply: () => anyStub, construct: () => anyStub });
     o._scene = {
-      _playerWorldX: vals["e.player_world_x"], _isDual: vals["e.is_dual"] !== 0, _physicsTick: vals["e.physics_tick"],
+      _inSidewaysStep: vals["e.in_sideways_step"] !== 0, _playerWorldX: vals["e.player_world_x"], _isDual: vals["e.is_dual"] !== 0, _physicsTick: vals["e.physics_tick"],
       _practicedMode: { practiceMode: vals["e.practice_mode"] !== 0 }, tweens: { killTweensOf() {}, add() {} }, noclipFlash: {},
       toggleGlitter: (on) => log("glitter:" + on), _enableDualMode: () => log("dual:on"), _disableDualMode: () => log("dual:off"),
       _getGamemodePortalMode: (t) => ({ portal_cube: "cube", portal_fly: "ship", portal_ball: "ball", portal_wave: "wave", portal_ufo: "ufo", portal_robot: "robot", portal_swing: "swing", portal_spider: "spider" })[t] || null,
@@ -181,6 +185,8 @@ this.tpOffset = ({ ${src.slice(tp, tpEnd).trim()} })._getTeleportPortalYOffset;
       if (where === "derived" && /ship_head/.test(f.name)) {
         const c = f.name.startsWith("prev_") ? o._prevShipHeadSlopeContact : o._shipHeadSlopeContact;
         v = f.name.endsWith("uid") ? (c ? c.obj.uid : NaN) : (c ? +c.gravityFlipped : 0);
+      } else if (where === "derived" && /^force_acc/.test(f.name)) {
+        v = o._forceAccum ? o._forceAccum[f.name.endsWith("x") ? "x" : "y"] : vals[f.name];
       } else if (where === "derived") {
         const lo = o._lastLandObject;
         v = lo ? (f.name === "last_land_x" ? lo.x : f.name === "last_land_y" ? lo.y : TYPES.indexOf(lo.type)) : vals[f.name];

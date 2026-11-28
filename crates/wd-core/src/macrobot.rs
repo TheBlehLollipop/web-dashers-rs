@@ -28,8 +28,10 @@ impl MacroBot {
 
 /// `PlayerState` keys in the order `reset()` assigns them, and the Rust field each one lives in (None: always false in the original).
 const STATE_KEYS: &[(&str, Option<&str>)] = &[
+    ("_gdFallStartY", Some("gd_fall_start_y")), ("_gdLandFlag", Some("gd_land_flag")), ("_gdPrevFallVel", Some("gd_prev_fall_vel")), ("_gdWasFalling", Some("gd_was_falling")),
+    ("_gdPrevHeld", Some("gd_prev_held")), ("_gdPrevCeiling", Some("gd_prev_ceiling")),
     ("y", Some("y")), ("lastY", Some("last_y")), ("lastGroundPosY", Some("last_ground_pos_y")), ("yVelocity", Some("y_velocity")), ("onGround", Some("on_ground")),
-    ("canJump", Some("can_jump")), ("isJumping", Some("is_jumping")), ("gravityFlipped", Some("gravity_flipped")), ("isFlying", Some("is_flying")), ("isBall", Some("is_ball")),
+    ("canJump", Some("can_jump")), ("isJumping", Some("is_jumping")), ("gravityFlipped", Some("gravity_flipped")), ("gravityScale", Some("gravity_scale")), ("isFlying", Some("is_flying")), ("isBall", Some("is_ball")),
     ("isWave", Some("is_wave")), ("isUfo", Some("is_ufo")), ("isSpider", Some("is_spider")), ("isBird", None), ("isDart", None), ("isRobot", Some("is_robot")), ("isSwing", Some("is_swing")),
     ("isJetpack", None), ("isMini", Some("is_mini")), ("wasBoosted", Some("was_boosted")), ("gdAccel", Some("gd_accel")), ("robotAccel", Some("robot_accel")),
     ("robotTouchedPad", Some("robot_touched_pad")), ("_slopeBounceActive", Some("slope_bounce_active")), ("pendingVelocity", Some("pending_velocity")), ("collideTop", Some("collide_top")),
@@ -47,7 +49,7 @@ fn fields() -> &'static Vec<(String, String)> {
 
 /// JS key -> Rust field for the PlayerState keys outside `reset()` that the original sets on the state later.
 fn dynamic_field(js_key: &str) -> Option<String> {
-    const SPECIAL: [(&str, &str); 10] = [("lastGroundY", "last_ground_y"), ("wasUpKeyDown", "was_up_key_down"), ("touchingRing", "touching_ring"), ("_lastBluePadTick", "last_blue_pad_tick"), ("_spiderTeleportPending", "spider_teleport_pending"), ("_spiderTeleportAnimTimer", "spider_teleport_anim_timer"),
+    const SPECIAL: [(&str, &str); 15] = [("_pressCount", "press_count"), ("forceTicks", "force_ticks"), ("safeHeadTicks", "safe_head_ticks"), ("flipHeadTicks", "flip_head_ticks"), ("jBlockTicks", "j_block_ticks"), ("lastGroundY", "last_ground_y"), ("wasUpKeyDown", "was_up_key_down"), ("touchingRing", "touching_ring"), ("_lastBluePadTick", "last_blue_pad_tick"), ("_spiderTeleportPending", "spider_teleport_pending"), ("_spiderTeleportAnimTimer", "spider_teleport_anim_timer"),
         ("_spiderFlashTimer", "spider_flash_timer"), ("_spiderFlashDuration", "spider_flash_duration"), ("diedThisFrame", "died_this_frame"), ("diedLastFrame", "died_last_frame")];
     SPECIAL.iter().find(|(k, _)| *k == js_key).map(|(_, f)| f.to_string())
 }
@@ -68,7 +70,7 @@ fn set_field(p: &mut Player, name: &str, value: f64) {
 }
 
 fn mode_id(p: &Player) -> &'static str {
-    if p.is_flying { "ship" } else if p.is_ball { "ball" } else if p.is_ufo { "ufo" } else if p.is_wave { "wave" } else if p.is_robot { "robot" } else if p.is_spider { "spider" } else { "cube" }
+    if p.is_swing { "swing" } else if p.is_flying { "ship" } else if p.is_ball { "ball" } else if p.is_ufo { "ufo" } else if p.is_wave { "wave" } else if p.is_robot { "robot" } else if p.is_spider { "spider" } else { "cube" }
 }
 
 /// `_cloneState(state)` for `PlayerState`: the primitive fields in the order the original keeps them.
@@ -77,11 +79,12 @@ fn clone_state(p: &Player) -> Json {
     for (key, field) in STATE_KEYS.iter() {
         let Some(field) = field else { out.push((key.to_string(), Json::Bool(false))); continue };
         let Some((v, ty)) = get_field(p, field) else { continue };
-        let j = match ty.as_str() { "bool" => Json::Bool(v != 0.0), "Option<f64>" => if v.is_nan() { Json::Null } else { Json::Num(v) }, _ => Json::Num(v) };
+        if v.is_nan() && matches!(*key, "_gdPrevFallVel" | "_gdPrevHeld") { continue; }
+        let j = match ty.as_str() { "bool" | "Option<bool>" => Json::Bool(v != 0.0), "Option<f64>" => if v.is_nan() { Json::Null } else { Json::Num(v) }, _ => Json::Num(v) };
         out.push((key.to_string(), j));
     }
     // keys the original adds to the state object later (only present once set)
-    for (key, field) in [("lastGroundY", "last_ground_y"), ("wasUpKeyDown", "was_up_key_down"), ("touchingRing", "touching_ring"), ("diedThisFrame", "died_this_frame"), ("diedLastFrame", "died_last_frame"), ("_lastBluePadTick", "last_blue_pad_tick")] {
+    for (key, field) in [("lastGroundY", "last_ground_y"), ("wasUpKeyDown", "was_up_key_down"), ("touchingRing", "touching_ring"), ("diedThisFrame", "died_this_frame"), ("diedLastFrame", "died_last_frame"), ("_lastBluePadTick", "last_blue_pad_tick"), ("_pressCount", "press_count"), ("forceTicks", "force_ticks"), ("safeHeadTicks", "safe_head_ticks"), ("flipHeadTicks", "flip_head_ticks"), ("jBlockTicks", "j_block_ticks")] {
         let Some((v, ty)) = get_field(p, field) else { continue };
         if ty.starts_with("Option") || field == "last_ground_y" { if v.is_nan() { continue; } }
         out.push((key.to_string(), match ty.as_str() { "bool" => Json::Bool(v != 0.0), _ => Json::Num(v) }));

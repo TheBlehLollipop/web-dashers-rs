@@ -35,3 +35,22 @@ mod imp {
     pub fn random() -> f64 { 0.5 }
 }
 pub use imp::*;
+
+/// `Math.hypot(a, b)` the way V8 computes it (scaled Kahan sum), not libm's `hypot`.
+pub fn hypot2(a: f64, b: f64) -> f64 {
+    if a.is_infinite() || b.is_infinite() { return f64::INFINITY; }
+    if a.is_nan() || b.is_nan() { return f64::NAN; }
+    let (x, y) = (a.abs(), b.abs());
+    let max = x.max(y);
+    if max == 0.0 { return 0.0; }
+    let mut sum = 0.0;
+    let mut compensation = 0.0;
+    for v in [x, y] {
+        let n = v / max;
+        let summand = n * n - compensation;
+        let preliminary = sum + summand;
+        compensation = (preliminary - sum) - summand;
+        sum = preliminary;
+    }
+    sum.sqrt() * max
+}

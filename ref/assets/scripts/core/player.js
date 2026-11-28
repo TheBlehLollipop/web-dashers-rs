@@ -3,6 +3,12 @@ class PlayerState {
     this.reset();
   }
   reset() {
+    this._gdFallStartY = null;
+    this._gdLandFlag = true;
+    this._gdPrevFallVel = undefined;
+    this._gdWasFalling = false;
+    this._gdPrevHeld = undefined;
+    this._gdPrevCeiling = false;
     this.y = 30;
     this.lastY = 30;
     this.lastGroundPosY = 30;
@@ -11,6 +17,7 @@ class PlayerState {
     this.canJump = true;
     this.isJumping = false;
     this.gravityFlipped = false;
+    this.gravityScale = 1;
     this.isFlying = false;
     this.isBall = false;
     this.isWave = false;
@@ -109,7 +116,7 @@ class StreakManager {
     this._active = false;
   }
   reset() {
-    this._pts.length = 0;
+          this._pts.length = 0;
     this._posInit = false;
     this._breakNext = true;
     this._distance = 0;
@@ -196,8 +203,8 @@ class StreakManager {
           d = next;
         }
       } else draw(0, 1);
+      }
     }
-  }
   _drawTextured(pts, slot) {
     const scene = this._scene;
     const name = this._textureName;
@@ -530,7 +537,14 @@ function ds(scene, x, y, frameName, depth, isVisible, fallbackFrame) {
   image.setVisible(isVisible && (!fallbackFrame || !!frame));
   return fallbackFrame
     ? { sprite: image, kind: "extra", _hasIconFrame: !!frame }
-    : { sprite: image };
+    : { sprite: image, kind: _layerKindForFrame(frameName) };
+}
+
+function _layerKindForFrame(frameName) {
+  if (/_glow_001\.png$/.test(frameName)) return "glow";
+  if (/_2_001\.png$/.test(frameName)) return "overlay";
+  if (/_extra_001\.png$/.test(frameName)) return "extra";
+  return "base";
 }
 
 function _textureHasFrameSafe(scene, textureKey, frameName) {
@@ -602,6 +616,14 @@ function _mixColors(colorA, colorB, amount) {
   return (rr << 16) | (gg << 8) | rb;
 }
 
+const PAD_EVENTS = { 35: 45, 140: 46, 1332: 47, 67: 48, 3005: 49 };
+const ORB_EVENTS = { 36: 34, 141: 35, 1333: 36, 84: 37, 1022: 38, 1330: 39, 1594: 40, 1704: 41, 1751: 42, 3004: 43, 3027: 44 };
+const PORTAL_EVENTS = {
+  portal_cube: 26, portal_fly: 27, portal_ball: 28, portal_robot: 31, portal_spider: 32, portal_swing: 33,
+  portal_gravity_toggle: 50, portal_gravity_down: 52, portal_gravity_up: 51, portal_mirror_on: 53, portal_mirror_off: 54,
+  portal_mini_off: 55, portal_mini_on: 56, portal_dual_on: 57, portal_dual_off: 58, portal_teleport: 59
+};
+
 class PlayerObject {
   constructor(scene, _0x3f50cc, _0x2811e1) {
     this._scene = scene;
@@ -639,6 +661,7 @@ class PlayerObject {
     this._spiderDashEffectDuration = 0.5;
     this._spiderTeleportCircles = [];
     this._robotJumpFlameSprite = null;
+    this._swingFires = null;
     this._robotJumpFlamePulse = 0;
     this._robotJumpFlameFadeInTimer = 0;
     this._robotJumpFlameActive = false;
@@ -673,6 +696,28 @@ class PlayerObject {
   _secondaryColor() {
     return this._invertPlayerColors ? window.mainColor : window.secondaryColor;
   }
+  _glowColor() {
+    return window.glowColor ?? this._secondaryColor();
+  }
+  _initGlowLayer(layer) {
+    if (!layer) return;
+    layer.sprite.setTint(this._glowColor());
+    layer.sprite._glowEnabled = !!window.glowEnabled;
+  }
+  setGlowEnabled(on) {
+    on = !!on;
+    const groups = [this._playerLayers, this._shipLayers, this._ballLayers, this._waveLayers, this._swingLayers, this._spiderLayers, this._robotLayers, this._birdLayers];
+    for (const group of groups) {
+      if (!group) continue;
+      const base = group.find(layer => layer?.sprite && layer.kind !== "glow");
+      for (const layer of group) {
+        if (!layer?.sprite || layer.kind !== "glow") continue;
+        layer.sprite._glowEnabled = on;
+        layer.sprite.setTint(this._glowColor());
+        layer.sprite.setVisible(on && !!base?.sprite?.visible);
+      }
+    }
+  }
   _tintForLayerKind(kind) {
     if (kind === "base") return this._primaryColor();
     if (kind === "glow") return window.iconGlowColor;
@@ -702,6 +747,8 @@ class PlayerObject {
     if (this._shipSpriteLayer?.sprite) this._shipSpriteLayer.sprite.setTint(this._primaryColor());
     if (this._shipGlowLayer?.sprite) this._shipGlowLayer.sprite.setTint(window.iconGlowColor);
     if (this._shipOverlayLayer?.sprite) this._shipOverlayLayer.sprite.setTint(this._secondaryColor());
+    if (this._swingSpriteLayer?.sprite) this._swingSpriteLayer.sprite.setTint(this._primaryColor());
+    if (this._swingOverlayLayer?.sprite) this._swingOverlayLayer.sprite.setTint(this._secondaryColor());
     if (this._ballSpriteLayer?.sprite) this._ballSpriteLayer.sprite.setTint(this._primaryColor());
     if (this._ballGlowLayer?.sprite) this._ballGlowLayer.sprite.setTint(window.iconGlowColor);
     if (this._ballOverlayLayer?.sprite) this._ballOverlayLayer.sprite.setTint(this._secondaryColor());
@@ -733,11 +780,13 @@ class PlayerObject {
   }
   _isObjectActivated(gameObj) {
     if (!gameObj) return false;
+    gameObj = gameObj._sidewaysSource || gameObj;
     if (!this._usesIndependentActivation(gameObj)) return !!gameObj.activated;
     return !!gameObj._activatedByPlayer?.[this._getActivationKey()];
   }
   _setObjectActivated(gameObj, activated = true) {
     if (!gameObj) return;
+    gameObj = gameObj._sidewaysSource || gameObj;
     if (!this._usesIndependentActivation(gameObj)) {
       gameObj.activated = !!activated;
       return;
@@ -1011,18 +1060,52 @@ class PlayerObject {
     }
     return true;
   }
+  _frameDelta(dx, dy) {
+    const level = this._scene?._level;
+    if (level?.direction < 0) dx = -dx;
+    if (level?.gameplaySideways) return [-dy, -dx];
+    return [dx, dy];
+  }
+  _frameAngleRange(min, max) {
+    const level = this._scene?._level;
+    let lo = min, hi = max;
+    if (level?.direction < 0) [lo, hi] = [180 - hi, 180 - lo];
+    if (level?.gameplaySideways) [lo, hi] = [270 - hi, 270 - lo];
+    return { min: lo, max: hi };
+  }
+  _framePointToScreen(frameX, gameY) {
+    if (this._scene?._inSidewaysStep) return [gameY, b(frameX)];
+    return [frameX, b(gameY)];
+  }
+  _applyParticleFrame() {
+    const setup = [
+      [this._particleEmitter, 225, 315, 600],
+      [this._flyParticleEmitter, 225, 315, 600],
+      [this._flyParticle2Emitter, 180, 360, 600],
+      [this._landEmitter1, 210, 330, 1000],
+      [this._landEmitter2, 210, 330, 1000]
+    ];
+    for (const [emitter, min, max, gravity] of setup) {
+      if (!emitter) continue;
+      emitter.particleAngle = this._frameAngleRange(min, max);
+      const [gx, gy] = this._frameDelta(0, gravity);
+      emitter.gravityX = gx;
+      emitter.gravityY = gy;
+    }
+  }
   _spawnSpiderTeleportEffects(oldGameY, newGameY) {
     this._streak?.breakPath();
     if (this._scene?._editorPlaytestActive) return;
     const duration = 0.5;
     const circleDuration = 0.4;
     const teleportTint = _mixColors(0xffffff, this._primaryColor(), 0.42);
-    const worldX = Number.isFinite(Number(this._scene?._playerWorldX)) ? Number(this._scene._playerWorldX) : 0;
-    const oldWorldY = b(oldGameY);
-    const newWorldY = b(newGameY);
+    const frameX = Number.isFinite(Number(this._scene?._playerWorldX)) ? Number(this._scene._playerWorldX) : 0;
+    const [oldX, oldWorldY] = this._framePointToScreen(frameX, oldGameY);
+    const [newX, newWorldY] = this._framePointToScreen(frameX, newGameY);
+    const midX = (oldX + newX) * 0.5;
     const midWorldY = (oldWorldY + newWorldY) * 0.5;
-    const goingUpOnScreen = newWorldY < oldWorldY;
-    const oldCircle = this._scene.add.circle(worldX, oldWorldY, 30, teleportTint, 0.45);
+    const goingUpInFrame = b(newGameY) < b(oldGameY);
+    const oldCircle = this._scene.add.circle(oldX, oldWorldY, 30, teleportTint, 0.45);
     oldCircle.setDepth(7.5);
     oldCircle.setBlendMode(S);
     oldCircle.setScale(0.85);
@@ -1042,7 +1125,8 @@ class PlayerObject {
       }
     });
 
-    const circle = this._scene.add.circle(worldX, newWorldY, 44, teleportTint, 1);
+    const circle = this._scene.add.circle(newX, newWorldY, 44, teleportTint, 1);
+    const [trailX, trailY] = this._frameDelta(this.p.mirrored ? 28 : -28, 0);
     circle.setDepth(7.55);
     circle.setBlendMode(S);
     circle.setScale(1.25);
@@ -1050,7 +1134,8 @@ class PlayerObject {
     this._spiderTeleportCircles.push(circle);
     this._scene.tweens.add({
       targets: circle,
-      x: worldX + (this.p.mirrored ? 28 : -28),
+      x: newX + trailX,
+      y: newWorldY + trailY,
       scaleX: 0.05,
       scaleY: 0.05,
       alpha: 0,
@@ -1067,14 +1152,18 @@ class PlayerObject {
       this._spiderDashEffectTimer = duration;
       this._spiderDashEffectDuration = duration;
       this._spiderDashEffectSprite.setTexture("GJ_GameSheet04", "spiderDash_001.png");
-      this._spiderDashEffectSprite.x = worldX;
+      this._spiderDashEffectSprite.x = midX;
       this._spiderDashEffectSprite.y = midWorldY;
-      this._spiderDashEffectSprite.rotation = Phaser.Math.DegToRad(goingUpOnScreen ? 90 : -90);
+      const dashAngle = goingUpInFrame ? 90 : -90;
+      const framedAngle = this._frameAngleRange(dashAngle, dashAngle).min;
+      this._spiderDashEffectSprite.rotation = Phaser.Math.DegToRad(framedAngle);
       const baseLength = 400;
-      const teleportDistance = Math.abs(newWorldY - oldWorldY);
+      const teleportDistance = Math.abs(newGameY - oldGameY);
       const dashLength = Math.max(0.12, teleportDistance / baseLength);
+      const level = this._scene?._level;
+      const reflections = (level?.direction < 0 ? 1 : 0) + (level?.gameplaySideways ? 1 : 0);
       this._spiderDashEffectSprite.scaleX = dashLength;
-      this._spiderDashEffectSprite.scaleY = 0.8;
+      this._spiderDashEffectSprite.scaleY = reflections % 2 ? -0.8 : 0.8;
       this._spiderDashEffectSprite.setTint(teleportTint);
       this._spiderDashEffectSprite.setAlpha(1);
       this._spiderDashEffectSprite.setVisible(true);
@@ -1606,6 +1695,14 @@ class PlayerObject {
       if (layer) { layer.kind = kind; layer.suffix = suffix; }
       return layer;
     }).filter(Boolean);
+    this._swingGlowLayer = this._swingLayers.find(layer => layer.kind === "glow");
+    this._swingOverlayLayer = this._swingLayers.find(layer => layer.kind === "overlay");
+    this._swingSpriteLayer = this._swingLayers.find(layer => layer.kind === "base");
+    this._swingExtraLayer = this._swingLayers.find(layer => layer.kind === "extra");
+    if (this._swingGlowLayer) {
+      this._swingGlowLayer.sprite.setTint(window.iconGlowColor);
+      this._swingGlowLayer.sprite._glowEnabled = !!window.iconGlowEnabled;
+    }
 
     this._allLayers = [...this._playerLayers, ...this._ballLayers, ...this._waveLayers, ...this._shipLayers, ...this._spiderLayers, ...this._robotLayers, ...this._birdLayers, ...this._swingLayers];
     this._applyPlayerTints();
@@ -1639,6 +1736,21 @@ class PlayerObject {
       this._robotJumpFlameSprite.setAlpha(0);
       this._robotJumpFlameSprite.setOrigin(0.5, 0);
       this._robotJumpFlameSprite.setBlendMode('ADD');
+    }
+    if (_textureHasFrameSafe(spriteY, "GJ_GameSheetIcons", "fireBoost_001.png")) {
+      const makeFire = (x, y, angle, base) => {
+        const sprite = spriteY.add.image(particleY, spriteX, "GJ_GameSheetIcons", "fireBoost_001.png");
+        sprite.setDepth(7.75);
+        sprite.setVisible(false);
+        sprite.setOrigin(0.5, 0);
+        sprite.setBlendMode('ADD');
+        return { sprite, x, y, angle: angle * Math.PI / 180, base, sx: 0.01, sy: 0.01, tween: null, loop: false };
+      };
+      this._swingFires = {
+        middle: makeFire(-14, 0, 90, 0.96),
+        bottom: makeFire(-9.5, 10, 45, 0.72),
+        top: makeFire(-9.5, -10, 135, 0.72)
+      };
     }
   }
   _updateDashAnimation(deltaTime) {
@@ -1790,6 +1902,23 @@ class PlayerObject {
     this._shipDragEmitter.setDepth(22);
     this._gameLayer.container.add(this._shipDragEmitter);
     this._shipDragActive = false;
+    this._swingBurstEmitters = [-10, 10].map(offsetY => {
+      const emitter = scene.add.particles(0, 0, "GJ_WebSheet", {
+        frame: "square.png",
+        speed: { min: 150, max: 250 },
+        lifespan: { min: 100, max: 180 },
+        scale: { start: 0.125, end: 0 },
+        color: [0xff6400, 0xff0000],
+        x: { min: -2, max: 2 },
+        y: { min: -2, max: 2 },
+        frequency: 14,
+        blendMode: "ADD"
+      });
+      emitter.stop();
+      emitter.setDepth(9);
+      this._gameLayer.container.add(emitter);
+      return { emitter, offsetY, baseAngle: offsetY < 0 ? -135 : 135, active: false };
+    });
     this._particleActive = false;
     this._flyParticle2Active = false;
     this._flyParticleActive = false;
@@ -1839,7 +1968,55 @@ class PlayerObject {
     this._waveTrail.addToContainer(this._gameLayer.container, 9);
     this._streak.addToContainer(this._gameLayer.container, 8);
   }
+  _stopSwingBurst() {
+    for (const burst of this._swingBurstEmitters || []) {
+      if (burst.active) burst.emitter.stop();
+      burst.active = false;
+    }
+  }
+  _updateSwingBurst(worldX, worldY) {
+    if (!this._swingBurstEmitters) return;
+    if (!this.p.isSwing || this.p.isDead || this._hidden) {
+      this._stopSwingBurst();
+      return;
+    }
+    const mini = this.p.isMini ? 0.6 : 1;
+    const mirror = this.p.mirrored ? -1 : 1;
+    const rotation = this.p.mirrored ? -this._rotation : this._rotation;
+    const cos = Math.cos(rotation);
+    const sin = Math.sin(rotation);
+    for (const burst of this._swingBurstEmitters) {
+      const lit = this.p.gravityFlipped ? burst.offsetY > 0 : burst.offsetY < 0;
+      const lx = -9.5 * mini * mirror;
+      const ly = burst.offsetY * mini;
+      const [bx, by] = this._frameDelta(lx * cos - ly * sin, lx * sin + ly * cos);
+      burst.emitter.particleX = worldX + bx;
+      burst.emitter.particleY = worldY + by;
+      const angle = (this.p.mirrored ? 180 - burst.baseAngle : burst.baseAngle) + rotation * 180 / Math.PI;
+      burst.emitter.particleAngle = this._frameAngleRange(angle - 10, angle + 10);
+      if (lit && !burst.active) burst.emitter.start();
+      else if (!lit && burst.active) burst.emitter.stop();
+      burst.active = lit;
+    }
+  }
   _updateParticles(_0xc43238, _0x52b718, _0x5af874) {
+    this._updateSwingBurst(this._scene._playerWorldX, b(this.p.y));
+    if (this._scene?._editorPlaytestActive) {
+      this._particleEmitter.stop();
+      this._particleActive = false;
+      this._flyParticleEmitter.stop();
+      this._flyParticleActive = false;
+      this._flyParticle2Emitter.stop();
+      this._flyParticle2Active = false;
+      this._shipDragEmitter.stop();
+      this._shipDragActive = false;
+      this._streak.stop();
+      this._streak.reset();
+      this._waveTrail.stop();
+      this._waveTrail.reset();
+      return;
+    }
+
     if (window.enableLDM) {
       if (this._particleEmitter) this._particleEmitter.stop();
       this._particleActive = false;
@@ -1863,8 +2040,14 @@ class PlayerObject {
     this._streak._mini = this.p.isMini;
     const _0x119eb7 = this._scene._playerWorldX;
     const _0x519d38 = b(this.p.y);
-    this._particleEmitter.particleX = _0x119eb7 - 20;
-    this._particleEmitter.particleY = _0x519d38 + (this.p.gravityFlipped ? (-26 + (this.p.isUfo ? -5 : 0)) : (26 + (this.p.isUfo ? 5 : 0)));
+    const frameKey = (this._scene?._level?.direction < 0 ? 1 : 0) + (this._scene?._level?.gameplaySideways ? 2 : 0);
+    if (frameKey !== this._particleFrameKey) {
+      this._particleFrameKey = frameKey;
+      this._applyParticleFrame();
+    }
+    const [dustX, dustY] = this._frameDelta(-20, this.p.gravityFlipped ? (-26 + (this.p.isUfo ? -5 : 0)) : (26 + (this.p.isUfo ? 5 : 0)));
+    this._particleEmitter.particleX = _0x119eb7 + dustX;
+    this._particleEmitter.particleY = _0x519d38 + dustY;
     const _0x4436ac = this.p.onGround && !this.p.isFlying && !this.p.isWave && !this.p.isSwing;
     if (_0x4436ac && !this._particleActive) {
       this._particleEmitter.start();
@@ -2013,6 +2196,7 @@ class PlayerObject {
     this.setWaveVisible(false);
     this.setSpiderVisible(false);
     this.setRobotVisible(false);
+    this.setSwingVisible(false);
     this._hideRobotJumpFlame?.();
     if (this._dashAnimationSprite) this._dashAnimationSprite.setVisible(false);
     if (this._spiderDashEffectSprite) this._spiderDashEffectSprite.setVisible(false);
@@ -2067,6 +2251,15 @@ class PlayerObject {
       this._shipExtraLayer.sprite.setVisible(this._shipExtraLayer._hasIconFrame !== false && (_0x1c5620));
     }
   }
+  setSwingVisible(_0x9b2d71) {
+    for (const layer of (this._swingLayers || [])) {
+      if (!layer?.sprite) continue;
+      layer.sprite.setVisible(layer._hasIconFrame !== false && (layer.kind === "glow" ? _0x9b2d71 && !!window.iconGlowEnabled : _0x9b2d71));
+    }
+    if (!_0x9b2d71 && this._swingFires) {
+      for (const fire of Object.values(this._swingFires)) fire.sprite.setVisible(false);
+    }
+  }
   setBirdVisible(v) {
     for (const layer of (this._birdLayers || [])) {
       if (layer === this._birdGlowLayer) {
@@ -2103,12 +2296,6 @@ class PlayerObject {
     if (this._waveGlowLayer) {
       this._waveGlowLayer.sprite.setVisible(_0x2d078b && this._waveGlowLayer.sprite._glowEnabled);
     }
-  }
-  setSwingVisible(v) {
-    for (const layer of this._swingLayers || []) {
-      layer.sprite.setVisible(v && layer._hasIconFrame !== false && (layer.kind !== "glow" || !!window.iconGlowEnabled));
-    }
-    if (!v) for (const flame of this._swingFlames || []) flame.setVisible(false);
   }
   _refreshSwingIcon() {
     for (const layer of this._swingLayers || []) {
@@ -2285,6 +2472,44 @@ class PlayerObject {
     this.setSpiderVisible(true);
   }
   syncSprites(cameraX, cameraY, _0x3afedf, mirrorOffset) {
+    const result = this._syncSpritesInner(cameraX, cameraY, _0x3afedf, mirrorOffset);
+    const level = this._scene?._level;
+    if (level?.direction < 0) this._reflectReversedSprites();
+    if (level?.gameplaySideways) this._reflectSidewaysSprites();
+    return result;
+  }
+  _framedSprites() {
+    const sprites = (this._allLayers || []).map(layer => layer?.sprite);
+    if (this._swingFires) for (const fire of Object.values(this._swingFires)) sprites.push(fire.sprite);
+    if (this._robotJumpFlameSprite) sprites.push(this._robotJumpFlameSprite);
+    return sprites;
+  }
+  _reflectReversedSprites() {
+    const px = this._lastScreenX;
+    if (!Number.isFinite(px)) return;
+    for (const sprite of this._framedSprites()) {
+      if (!sprite || !sprite.visible) continue;
+      sprite.x = 2 * px - sprite.x;
+      sprite.rotation = -sprite.rotation;
+      sprite.scaleX = -sprite.scaleX;
+    }
+  }
+  _reflectSidewaysSprites() {
+    const px = this._lastScreenX;
+    const py = this._lastScreenY;
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+    const sprites = this._framedSprites();
+    for (const sprite of sprites) {
+      if (!sprite || !sprite.visible) continue;
+      const dx = sprite.x - px;
+      const dy = sprite.y - py;
+      sprite.x = px - dy;
+      sprite.y = py - dx;
+      sprite.rotation = Math.PI / 2 - sprite.rotation;
+      sprite.scaleX = -sprite.scaleX;
+    }
+  }
+  _syncSpritesInner(cameraX, cameraY, _0x3afedf, mirrorOffset) {
     if (this._endAnimating) {
       return;
     }
@@ -2298,7 +2523,7 @@ class PlayerObject {
     this._lastScreenY = _0x1a433c;
     this._aboveContainer.x = -cameraX;
     this._aboveContainer.y = cameraY;
-if (this.p.isFlying || this.p.isUfo) {
+if (this.p.isFlying || this.p.isUfo || this.p.isSwing) {
       const _miniS = this.p.isMini ? 0.6 : 1;
       const _0x3904f8 = this.p.isUfo ? (this.p.gravityFlipped ? -10 : 10) * _miniS : 10;
       const playerOffset = (this.p.gravityFlipped ? -10 : 10) * _miniS;
@@ -2324,6 +2549,19 @@ if (this.p.isFlying || this.p.isUfo) {
           }
         }
       }
+      if (this.p.isSwing) {
+        this.setCubeVisible(false);
+        for (const layer of this._swingLayers) {
+          if (layer) {
+            layer.sprite.x = _0x7f0705;
+            layer.sprite.y = _0x1a433c;
+            layer.sprite.rotation = this.p.mirrored ? -playerRotation : playerRotation;
+            layer.sprite.scaleY = _miniS;
+            layer.sprite.scaleX = this.p.mirrored ? -_miniS : _miniS;
+          }
+        }
+        this._syncSwingFire(_0x3afedf || 0, _0x7f0705, _0x1a433c, this.p.mirrored ? -playerRotation : playerRotation);
+      }
 	if (this.p.isUfo && !this.p.isDead) {
         for (const layer of this._birdLayers) {
           if (layer) {
@@ -2347,7 +2585,7 @@ if (this.p.isFlying || this.p.isUfo) {
             playerLayerItem.sprite.x = _0x7f0705 + shipXOffset + cubeSide * 20 * _miniS * sinRotation * mirrored;
             playerLayerItem.sprite.y = _0x1a433c + shipYOffset + (this.p.gravityFlipped ? (-20 * _miniS) : 0) - cubeSide * 20 * _miniS * cosRotation;
           } else {
-            playerLayerItem.sprite.x = _0x7f0705 + _0x562424;
+          playerLayerItem.sprite.x = _0x7f0705 + _0x562424;
             playerLayerItem.sprite.y = _0x1a433c + _0x3011c9;
           }
           playerLayerItem.sprite.rotation = this.p.mirrored ? -playerRotation : playerRotation;
@@ -2419,7 +2657,7 @@ if (this.p.isFlying || this.p.isUfo) {
       }
       
       for (const playerLayer of this._allLayers) {
-        if (playerLayer) {
+        if (playerLayer && !this._swingLayers.includes(playerLayer)) {
             playerLayer.sprite.x = _0x7f0705;
             playerLayer.sprite.y = _0x1a433c;
             const isBallLayer = this._ballLayers.includes(playerLayer);
@@ -2440,7 +2678,7 @@ if (this.p.isFlying || this.p.isUfo) {
       }
       
       for (const playerLayer of this._allLayers) {
-        if (playerLayer) {
+        if (playerLayer && !this._swingLayers.includes(playerLayer)) {
             playerLayer.sprite.x = _0x7f0705;
             playerLayer.sprite.y = _0x1a433c;
             const isBallLayer = this._ballLayers.includes(playerLayer);
@@ -2515,6 +2753,16 @@ if (this.p.isFlying || this.p.isUfo) {
     if (this._scene?._isDual) return;
     this._gameLayer.setFlyMode(...args);
   }
+  _enterFreeModeCamera(portal) {
+    this._setGamemodeFlyBounds(false, 0);
+    if (this._scene?._isDual) return;
+    const layer = this._gameLayer;
+    layer.freeModeCamera = true;
+    if (portal.cameraSettings) {
+      layer.freeCamEasing = portal.cameraSettings.easing;
+      layer.freeCamPadding = portal.cameraSettings.padding;
+    }
+  }
   enterShipMode(_0xeb37c6 = null, fromCheckpoint = false) {
     if (this.p.isFlying) {
       return;
@@ -2524,6 +2772,7 @@ if (this.p.isFlying || this.p.isUfo) {
     this.exitRobotMode();
     this.exitBallMode();
     this.exitWaveMode();
+    this.exitSwingMode();
     this.p.isFlying = true;
     this._scene.toggleGlitter(true);
     if (!fromCheckpoint){ // dont mess with y velocity if ur loading a checkpoint
@@ -2551,7 +2800,8 @@ if (this.p.isFlying || this.p.isUfo) {
       spawnY = _0xeb37c6.portalY !== undefined ? _0xeb37c6.portalY : _0xeb37c6.y;
     }
     this._syncModeIcons();
-    this._setGamemodeFlyBounds(true, spawnY, f, false);
+    if (_0xeb37c6?.freeMode) this._enterFreeModeCamera(_0xeb37c6);
+    else this._setGamemodeFlyBounds(true, spawnY, f, false);
   }
   applyShakeOffset(ox, oy) {
     for (const layer of this._allLayers) {
@@ -2608,6 +2858,57 @@ if (this.p.isFlying || this.p.isUfo) {
       this._setGamemodeFlyBounds(false, 0);
     }
   }
+  enterSwingMode(_0x8a1c4e = null, fromCheckpoint = false) {
+    if (this.p.isSwing) return;
+    this.exitShipMode();
+    this.exitBallMode();
+    this.exitWaveMode();
+    this.exitUfoMode();
+    this.exitSpiderMode();
+    this.exitRobotMode();
+    this.p.isSwing = true;
+    if (!fromCheckpoint) this.p.yVelocity *= 0.5;
+    this.p.onGround = false;
+    this.p.canJump = false;
+    this.p.isJumping = false;
+    this.stopRotation();
+    this._rotation = 0;
+    this._particleEmitter.stop();
+    this._streak.reset();
+    this._streak.start();
+    this.setBallVisible(false);
+    this.setShipVisible(false);
+    this.setWaveVisible(false);
+    this.setBirdVisible(false);
+    this.setSpiderVisible(false);
+    this.setRobotVisible(false);
+    this.setSwingVisible(true);
+    this.setCubeVisible(false);
+    this._startSwingFires();
+    let spawnY = this.p.y;
+    if (_0x8a1c4e) {
+      spawnY = _0x8a1c4e.portalY !== undefined ? _0x8a1c4e.portalY : _0x8a1c4e.y;
+    }
+    if (_0x8a1c4e?.freeMode) this._enterFreeModeCamera(_0x8a1c4e);
+    else this._setGamemodeFlyBounds(true, spawnY, f, false);
+  }
+  exitSwingMode() {
+    if (!this.p.isSwing) return;
+    this.p.isSwing = false;
+    this.p.yVelocity *= 0.5;
+    this.p.onGround = false;
+    this.p.canJump = false;
+    this.p.isJumping = false;
+    this.stopRotation();
+    this._rotation = 0;
+    this._streak.stop();
+    this._streak.reset();
+    this.setSwingVisible(false);
+    this.setCubeVisible(!this.p.isBall && !this.p.isWave);
+    this.setBallVisible(this.p.isBall);
+    this.setWaveVisible(this.p.isWave);
+    this._setGamemodeFlyBounds(false, 0);
+  }
   enterBallMode(_0x36bb3d = null) {
     if (this.p.isBall) {
       return;
@@ -2616,6 +2917,7 @@ if (this.p.isFlying || this.p.isUfo) {
     this.exitSpiderMode();
     this.exitRobotMode();
     this.exitWaveMode();
+    this.exitSwingMode();
     this.p.isBall = true;
     this.p.ballShouldRotate = false;
     this.p.ballRotateOpposite = false;
@@ -2635,7 +2937,8 @@ if (this.p.isFlying || this.p.isUfo) {
       _0x18df19 = _0x36bb3d.portalY !== undefined ? _0x36bb3d.portalY : _0x36bb3d.y;
     }
     this._syncModeIcons();
-    this._setGamemodeFlyBounds(true, _0x18df19, f - a * 2, false);
+    if (_0x36bb3d?.freeMode) this._enterFreeModeCamera(_0x36bb3d);
+    else this._setGamemodeFlyBounds(true, _0x18df19, f - a * 2, false);
   }
   exitBallMode() {
     if (!this.p.isBall) {
@@ -2667,6 +2970,7 @@ if (this.p.isFlying || this.p.isUfo) {
     this.exitRobotMode();
     this.exitShipMode();
     this.exitBallMode();
+    this.exitSwingMode();
     this.p.isWave = true;
     this.p.yVelocity = 0;
     this.p.onGround = false;
@@ -2687,7 +2991,8 @@ if (this.p.isFlying || this.p.isUfo) {
       _0x38b484 = _0x5a10cc.portalY !== undefined ? _0x5a10cc.portalY : _0x5a10cc.y;
     }
     this._syncModeIcons();
-    this._setGamemodeFlyBounds(true, _0x38b484, f, false);
+    if (_0x5a10cc?.freeMode) this._enterFreeModeCamera(_0x5a10cc);
+    else this._setGamemodeFlyBounds(true, _0x38b484, f, false);
   }
   exitWaveMode() {
     if (!this.p.isWave) {
@@ -2722,6 +3027,7 @@ if (this.p.isFlying || this.p.isUfo) {
     this.exitRobotMode();
     this.exitBallMode();
     this.exitWaveMode();
+    this.exitSwingMode();
     const savedPortalYVelocity = Number.isFinite(portalYVelocity) ? portalYVelocity : null;
     this.p.isSpider = true;
     if (!enteredFromPortal) this.p.yVelocity = 0;
@@ -2747,7 +3053,8 @@ if (this.p.isFlying || this.p.isUfo) {
     const spiderBaseHeight = typeof f !== "undefined" ? f : 480;
     const spiderFlyHeight = Math.max(spiderBlockSize, spiderBaseHeight - spiderBlockSize);
     this._syncModeIcons();
-    this._setGamemodeFlyBounds(true, _y, spiderFlyHeight, false, spiderFlyHeight);
+    if (portal?.freeMode) this._enterFreeModeCamera(portal);
+    else this._setGamemodeFlyBounds(true, _y, spiderFlyHeight, false, spiderFlyHeight);
     if (savedPortalYVelocity !== null) this.p.yVelocity = savedPortalYVelocity;
     this._primeSpiderAnimationFrame(1 / 30);
   }
@@ -2786,6 +3093,7 @@ if (this.p.isFlying || this.p.isUfo) {
     this.exitWaveMode();
     this.exitSpiderMode();
     this.exitUfoMode();
+    this.exitSwingMode();
     const savedPortalYVelocity = Number.isFinite(portalYVelocity) ? portalYVelocity : null;
     this.p.isRobot = true;
     this.p._robotHold = false;
@@ -2836,6 +3144,7 @@ if (this.p.isFlying || this.p.isUfo) {
     this.exitBallMode();
     this.exitWaveMode();
     this.exitShipMode();
+    this.exitSwingMode();
     this.p.isUfo = true;
     this._scene.toggleGlitter(true);
     if (!fromCheckpoint){ // dont mess with y velocity if ur loading a checkpoint
@@ -2866,7 +3175,8 @@ if (this.p.isFlying || this.p.isUfo) {
       _spawnY = _portal.portalY !== undefined ? _portal.portalY : _portal.y;
     }
     this._syncModeIcons();
-    this._setGamemodeFlyBounds(true, _spawnY, f, false);
+    if (_portal?.freeMode) this._enterFreeModeCamera(_portal);
+    else this._setGamemodeFlyBounds(true, _spawnY, f, false);
   }
   exitUfoMode() {
     if (!this.p.isUfo) return;
@@ -2896,68 +3206,64 @@ if (this.p.isFlying || this.p.isUfo) {
     this._syncModeIcons();
     this._setGamemodeFlyBounds(false, 0);
   }
-  enterSwingMode(portal = null, fromCheckpoint = false) {
-    if (this.p.isSwing) {
-      if (portal) {
-        const spawnY = portal.portalY ?? portal.y ?? this.p.y;
-        this._setGamemodeFlyBounds(true, spawnY, f, false);
+  _addBlockForce(obj, px, py) {
+    if (obj.forceId >= 1) {
+      this._forceIds ||= new Set();
+      if (this._forceIds.has(obj.forceId)) return;
+      this._forceIds.add(obj.forceId);
+    }
+    const radius = obj.hitbox_radius > 0 ? obj.hitbox_radius : Math.max(obj.w, obj.h) / 2;
+    let force = obj.force;
+    let ang;
+    if (obj.forceRadial) {
+      ang = Math.atan2(obj.y - py, obj.x - px) + (obj.forceFlipY ? 0 : Math.PI);
+    } else {
+      ang = (90 - (obj.rotationDegrees || 0) + (obj.forceFlipY ? 180 : 0)) * Math.PI / 180;
+    }
+    if (obj.forceRange) {
+      let t;
+      if (obj.forceRadial) {
+        const dist = Math.hypot(obj.x - px, obj.y - py);
+        t = dist < radius ? 1 - dist / radius : 0;
+      } else {
+        t = ((radius + (obj.x - px) * Math.cos(ang) + (obj.y - py) * Math.sin(ang)) / radius) * 0.5;
       }
-      return;
+      t = Math.max(0, Math.min(1, t));
+      force = obj.forceMin + t * (obj.forceMax - obj.forceMin);
     }
-    this.exitShipMode();
-    this.exitBallMode();
-    this.exitWaveMode();
-    this.exitUfoMode();
-    this.exitSpiderMode();
-    this.exitRobotMode();
-    this.p.isSwing = true;
-    this.p.onCeiling = false;
-    this.p._swingFlipPending = false;
-    this._scene.toggleGlitter(true);
-    if (!fromCheckpoint) {
-      this.p.yVelocity *= 0.5;
+    const acc = this._forceAccum ||= { x: 0, y: 0 };
+    acc.x += force * Math.cos(ang);
+    acc.y += force * Math.sin(ang);
+    const len = Math.hypot(acc.x, acc.y);
+    if (len > 10000) {
+      acc.x *= 10000 / len;
+      acc.y *= 10000 / len;
     }
-    this.p.onGround = false;
-    this.p.canJump = false;
-    this.p.isJumping = false;
-    this.stopRotation();
-    this._rotation = 0;
-    this._particleEmitter.stop();
-    this._particleActive = false;
-    this._streak.resetForModeChange();
-    this._streak.start();
-    this._syncModeIcons();
-    const spawnY = portal?.portalY ?? portal?.y ?? this.p.y;
-    this._setGamemodeFlyBounds(true, spawnY, f, false);
+    this.p.forceTicks = 2;
   }
-  exitSwingMode() {
-    if (!this.p.isSwing) return;
-    this.p.isSwing = false;
-    this.p.onCeiling = false;
-    this.p._swingFlipPending = false;
-    this.setSwingVisible(false);
-    this._flyParticleEmitter.stop();
-    this._flyParticle2Emitter.stop();
-    this._flyParticleActive = false;
-    this._flyParticle2Active = false;
-    this._scene.toggleGlitter(false);
-    if (!this._slopeRiding) this.p.yVelocity *= 0.5;
-    this.p.onGround = false;
-    this.p.canJump = false;
-    this.p.isJumping = false;
-    if (!this._streak._long) this._streak.stop();
-    this._streak.resetForModeChange();
-    this.stopRotation();
-    this._rotation = 0;
-    this._syncModeIcons();
-    this._setGamemodeFlyBounds(false, 0);
+  _forceModeFactor() {
+    const p = this.p;
+    if (p.isFlying) return p.isMini ? 0.5875 : 0.47;
+    if (p.isUfo) return p.isMini ? 0.725 : 0.58;
+    if (p.isSwing) return p.isMini ? 0.6154 : 0.4;
+    if (p.isBall || p.isSpider) return p.isMini ? 0.725 : 0.6;
+    if (p.isRobot) return p.isMini ? 0.725 : 0.9;
+    return p.isMini ? 0.725 : 1;
+  }
+  _releaseJumpHold() {
+    this.p.upKeyDown = false;
+    this.p.upKeyPressed = false;
+    this.p.queuedHold = false;
+    if (this._scene) this._scene._stopJumpLatch = true;
   }
   hitGround(skipBurst = false) {
+    if (this.p.jBlockTicks > 0 && !this.p.onGround) this._releaseJumpHold();
     this._iconEffectBoostTrail = false;
     const _dashSliding = this._isDashSpinning();
     if (_dashSliding) skipBurst = true;
     this._slopeLaunchSpin = false;
     const _0x4a38a5 = !skipBurst && !this.p.onGround;
+    if (!this.p.onGround) this._landingGameEvent();
     if (!this.p.isFlying && !this.p.isWave && !this.p.isUfo && !this.p.isSwing) {
       this.p.lastGroundY = this.p.y;
     }
@@ -2987,9 +3293,9 @@ if (this.p.isFlying || this.p.isUfo) {
       if (!window.enableLDM) {
         this._landIdx = !this._landIdx;
         const _0x31584b = this._landIdx ? this._landEmitter1 : this._landEmitter2;
-        const _0x2248d5 = this._scene._playerWorldX;
-        const _0x17e0bb = this.p.gravityFlipped ? b(this.p.y) - 30 : b(this.p.y) + 30;
-        _0x31584b.explode(10, _0x2248d5, _0x17e0bb);
+        const [baseX, baseY] = this._framePointToScreen(this._scene._playerWorldX, this.p.y);
+        const [landX, landY] = this._frameDelta(0, this.p.gravityFlipped ? -30 : 30);
+        _0x31584b.explode(10, baseX + landX, baseY + landY);
       }
     }
   }
@@ -3014,6 +3320,67 @@ if (this.p.isFlying || this.p.isUfo) {
       1751: 0xff00ff
     };
     return colororb[Number(gameObj?.padId ?? gameObj?.orbId)] ?? this._primaryColor();
+  }
+
+  _stepGameEvents() {
+    const p = this.p;
+    const v = (p.gravityFlipped ? -1 : 1) * p.yVelocity / 2;
+    const prev = p._gdPrevFallVel;
+    p._gdPrevFallVel = v;
+    const falling = this.playerIsFalling();
+    if (p.onGround) p._gdFallStartY = p.y;
+    else if (falling && !p._gdWasFalling) p._gdFallStartY = p.y;
+    p._gdWasFalling = falling;
+    const held = !!p.upKeyDown;
+    const heldChanged = p._gdPrevHeld !== undefined && p._gdPrevHeld !== held;
+    p._gdPrevHeld = held;
+    const ceiling = !!p.onCeiling;
+    const hitCeiling = ceiling && !p._gdPrevCeiling;
+    p._gdPrevCeiling = ceiling;
+    const level = this._scene?._level;
+    if (!level?.gameEvent) return;
+    if (heldChanged && p.isFlying) level.gameEvent(held ? 16 : 17);
+    if (heldChanged && p.isWave) level.gameEvent(held ? 21 : 22);
+    if (hitCeiling && !p.gravityFlipped) level.gameEvent(6);
+    if (prev === undefined || this._slopeRiding) return;
+    if (v < -2 && prev > -2) level.gameEvent(76);
+    if (v < -7 && prev > -7) level.gameEvent(77);
+    if (v < -14 && prev > -14) level.gameEvent(78);
+  }
+
+  _landingGameEvent() {
+    const level = this._scene?._level;
+    if (!level?.gameEvent) return;
+    if (this.p.isWave) return;
+    const start = this.p._gdFallStartY;
+    if (start !== undefined && start !== null) {
+      const d = Math.abs(start - this.p.y) / 2;
+      if (d > 7.5) level.gameEvent(d > 450 ? 68 : d > 300 ? 67 : d > 150 ? 66 : 65);
+      this.p._gdFallStartY = null;
+    }
+    const v = (this.p.gravityFlipped ? 1 : -1) * this.p.yVelocity / 2;
+    const id = v > 14 ? 5 : v > 8 ? 4 : v > 4 ? 3 : v > 1 ? (this.p._gdLandFlag !== false ? 1 : 2) : 0;
+    this.p._gdLandFlag = true;
+    if (id) level.gameEvent(id);
+  }
+
+  _objectGameEvent(gameObj, colType) {
+    this.p._gdLandFlag = false;
+    const level = this._scene?._level;
+    if (!level?.gameEvent) return;
+    if (colType === jumpPadType) {
+      level.gameEvent(9);
+      const pad = PAD_EVENTS[gameObj.padId];
+      if (pad) level.gameEvent(pad);
+    } else if (colType === jumpRingType) {
+      level.gameEvent(8);
+      const orb = ORB_EVENTS[gameObj.orbId];
+      if (orb) level.gameEvent(orb);
+    } else {
+      const portal = colType === portalUfoType ? 29 : colType === portalWaveType ? 30 : PORTAL_EVENTS[colType];
+      if (portal) level.gameEvent(portal);
+      if (colType === "portal_teleport") level.gameEvent(25);
+    }
   }
 
   _orbpadHitEffect(gameObj) {
@@ -3117,6 +3484,7 @@ if (this.p.isFlying || this.p.isUfo) {
     this._flyParticle2Active = false;
     this._shipDragEmitter.stop();
     this._shipDragActive = false;
+    this._stopSwingBurst();
     this._streak.stop();
     this._streak.reset();
     this._waveTrail.stop();
@@ -3140,80 +3508,84 @@ if (this.p.isFlying || this.p.isUfo) {
       this.setSwingVisible(false);
       this.setSpiderVisible(false);
       this.setRobotVisible(false);
+      this.setSwingVisible(false);
       if (this._dashAnimationSprite) this._dashAnimationSprite.setVisible(false);
       return;
     }
 
     const _0x3f4b84 = this._scene;
-    const _0x3f0446 = _0x3f4b84._getMirrorXOffset(_0x3f4b84._playerWorldX - _0x3f4b84._cameraX);
-    const _0x53ac5b = b(this.p.y) + this._lastCameraY;
+    const _deathSwapped = !!_0x3f4b84._inSidewaysStep;
+    const _deathWorldX = _deathSwapped ? this.p.y : _0x3f4b84._playerWorldX;
+    const _deathWorldY = _deathSwapped ? _0x3f4b84._playerWorldX : this.p.y;
+    const _0x3f0446 = _0x3f4b84._getMirrorXOffset(_deathWorldX - _0x3f4b84._cameraX);
+    const _0x53ac5b = b(_deathWorldY) + this._lastCameraY;
     const _0x281e43 = 0.9;
     this._deathEffectPlayback = window.playIconDeathEffect(_0x3f4b84, window.currentDeathEffect,
       _0x3f0446, _0x53ac5b, 17, this.p.isMini ? 0.6 : 1);
     if (!this._deathEffectPlayback) {
-      this._deathBurstEmitter = _0x3f4b84.add.particles(_0x3f0446, _0x53ac5b, "GJ_WebSheet", {
-        frame: "square.png",
-        speed: {
-          min: 200,
-          max: 800
-        },
-        angle: {
-          min: 0,
-          max: 360
-        },
-        scale: {
-          start: 18 / 32,
-          end: 0
-        },
-        alpha: {
-          start: 1,
-          end: 0
-        },
-        lifespan: {
-          min: 50,
-          max: 800
-        },
-        quantity: 100,
-        stopAfter: 100,
-        blendMode: S,
-        tint: this._primaryColor(),
-        x: {
-          min: -20,
-          max: 20
-        },
-        y: {
-          min: -20,
-          max: 20
+    this._deathBurstEmitter = _0x3f4b84.add.particles(_0x3f0446, _0x53ac5b, "GJ_WebSheet", {
+      frame: "square.png",
+      speed: {
+        min: 200,
+        max: 800
+      },
+      angle: {
+        min: 0,
+        max: 360
+      },
+      scale: {
+        start: 18 / 32,
+        end: 0
+      },
+      alpha: {
+        start: 1,
+        end: 0
+      },
+      lifespan: {
+        min: 50,
+        max: 800
+      },
+      quantity: 100,
+      stopAfter: 100,
+      blendMode: S,
+      tint: this._primaryColor(),
+      x: {
+        min: -20,
+        max: 20
+      },
+      y: {
+        min: -20,
+        max: 20
+      }
+    }).setScrollFactor(0).setDepth(15);
+    const _0x438d80 = _0x3f4b84.add.graphics().setScrollFactor(0).setDepth(15).setBlendMode(S);
+    this._deathFlashGraphics = _0x438d80;
+    const _0x4683eb = {
+      t: 0
+    };
+    const shrink = false;
+    this._deathFlashTween = _0x3f4b84.tweens.add({
+      targets: _0x4683eb,
+      t: 1,
+      duration: 300,
+      ease: shrink ? "Quad.In" : "Quad.Out",
+      onUpdate: () => {
+        const radius = (shrink ? 90 : 14) + _0x4683eb.t * (shrink ? -76 : 76);
+        const alpha = Math.max(0, 1 - _0x4683eb.t * _0x4683eb.t);
+        _0x438d80.clear();
+        _0x438d80.fillStyle(this._primaryColor(), alpha);
+        _0x438d80.fillCircle(_0x3f0446, _0x53ac5b, radius);
+      },
+      onComplete: () => {
+        if (this._deathFlashGraphics === _0x438d80) {
+          this._deathFlashGraphics = null;
         }
-      }).setScrollFactor(0).setDepth(15);
-      const _0x438d80 = _0x3f4b84.add.graphics().setScrollFactor(0).setDepth(15).setBlendMode(S);
-      this._deathFlashGraphics = _0x438d80;
-      const _0x4683eb = {
-        t: 0
-      };
-      const shrink = false;
-      this._deathFlashTween = _0x3f4b84.tweens.add({
-        targets: _0x4683eb,
-        t: 1,
-        duration: 300,
-        ease: shrink ? "Quad.In" : "Quad.Out",
-        onUpdate: () => {
-          const radius = (shrink ? 90 : 14) + _0x4683eb.t * (shrink ? -76 : 76);
-          const alpha = Math.max(0, 1 - _0x4683eb.t * _0x4683eb.t);
-          _0x438d80.clear();
-          _0x438d80.fillStyle(this._primaryColor(), alpha);
-          _0x438d80.fillCircle(_0x3f0446, _0x53ac5b, radius);
-        },
-        onComplete: () => {
-          if (this._deathFlashGraphics === _0x438d80) {
-            this._deathFlashGraphics = null;
-          }
-          if (this._deathFlashTween) {
-            this._deathFlashTween = null;
-          }
-          _0x438d80.destroy();
+        if (this._deathFlashTween) {
+          this._deathFlashTween = null;
         }
-      });
+        _0x438d80.destroy();
+      }
+    });
     }
     if (window.iconExplode) this._createExplosionPieces(_0x3f0446, _0x53ac5b, _0x281e43);
     this.setCubeVisible(false);
@@ -3224,6 +3596,7 @@ if (this.p.isFlying || this.p.isUfo) {
     this.setSwingVisible(false);
     this.setSpiderVisible(false);
     this.setRobotVisible(false);
+    this.setSwingVisible(false);
   }
   _createExplosionPieces(_0x49be85, _0x13b56e, _0x349a09) {
     const _0x44acaf = this._scene;
@@ -3749,7 +4122,7 @@ if (this.p.isFlying || this.p.isUfo) {
     const wallRight = wallLeft + wallW;
     const boxBot = gameObj.y - halfH;
     const boxTop = gameObj.y + halfH;
-    const inner = this.p.isWave ? (this.p.isMini ? 2 : 3) : 9;
+    const inner = this.p.isWave ? (this.p.isMini ? 2 : 3) : (this.p.isMini ? 5.4 : 9);
     return (pieceWidth + inner > wallLeft) && (pieceWidth - inner < wallRight)
         && (playersY + inner > boxBot) && (playersY - inner < boxTop);
   }
@@ -3998,12 +4371,12 @@ if (this.p.isFlying || this.p.isUfo) {
       const waveHalf = this.p.isMini ? 6 : 9;
       if (!this._waveSlideActive) {
         const waveInner = waveHalf / 3;
-        const insideSolid = gameObj.slopeSolidBelow
+      const insideSolid = gameObj.slopeSolidBelow
           ? (playersY - waveInner < surfaceY)
           : (playersY + waveInner > surfaceY);
-        if (insideSolid) return { landed: false, died: true, immediate: true };
-        return { landed: false, died: false };
-      }
+      if (insideSolid) return { landed: false, died: true, immediate: true };
+      return { landed: false, died: false };
+    }
       playerSize = waveHalf;
     }
 
@@ -4221,6 +4594,8 @@ if (this.p.isFlying || this.p.isUfo) {
       }
       this.p.gravityFlipped = flipped;
       this._gdFlipTick = this._scene?._physicsTick;
+      this._scene?._level?.gameEvent?.(flipped ? 10 : 11);
+      if (this.p.isSwing) this._updateSwingFireSide();
       this.p.yVelocity *= _0x11bbde;
       this.p.onGround = false;
       this.p.canJump = false;
@@ -4232,7 +4607,7 @@ if (this.p.isFlying || this.p.isUfo) {
     if (this.p.isSwing) return;
     this.rotateActionActive = true;
     this.rotateActionTime = 0;
-    this.rotateActionDuration = this.p.isMini ? 1 / 3 : 0.39 / d;
+    this.rotateActionDuration = (this.p.isMini ? 1 / 3 : 0.39 / d) / (this.p.gravityScale > 0 ? this.p.gravityScale : 1);
     this.rotateActionStart = this._rotation;
     this.rotateActionTotal = Math.PI * this.flipMod() * direction;
   }
@@ -4361,7 +4736,9 @@ if (this.p.isFlying || this.p.isUfo) {
     if (parseInt(gameObj.objid ?? 0, 10) !== 143) return false;
     const linkedObjectId = Number.isInteger(gameObj._eeObjectId) ? gameObj._eeObjectId : null;
     if (linkedObjectId === null) return false;
-    return this._gameLayer?._breakblock?.(linkedObjectId) ?? false;
+    const broke = this._gameLayer?._breakblock?.(linkedObjectId) ?? false;
+    if (broke) this._scene?._level?.gameEvent?.(61);
+    return broke;
   }
 
   playerIsFalling() {
@@ -4374,12 +4751,22 @@ if (this.p.isFlying || this.p.isUfo) {
   }
   _gdSpeedConsts() {
     const sp = typeof playerSpeed === 'number' ? playerSpeed : 0;
+    let grav = p;
+    let yStart = 22.360064;
     if (typeof SpeedPortal !== 'undefined') {
-      if (sp === SpeedPortal.HALF) return { grav: 1.880398, yStart: 21.240064 };
-      if (sp === SpeedPortal.TWO_TIMES) return { grav: 1.914398, yStart: 22.840064 };
-      if (sp === SpeedPortal.THREE_TIMES || sp === SpeedPortal.FOUR_TIMES) return { grav: 1.922398, yStart: 22.460064 };
+      if (sp === SpeedPortal.HALF) {
+        grav = 1.880398;
+        yStart = 21.240064;
+      } else if (sp === SpeedPortal.TWO_TIMES) {
+        grav = 1.914398;
+        yStart = 22.840064;
+      } else if (sp === SpeedPortal.THREE_TIMES || sp === SpeedPortal.FOUR_TIMES) {
+        grav = 1.922398;
+        yStart = 22.460064;
+      }
     }
-    return { grav: p, yStart: 22.360064 };
+    const scale = this.p.gravityScale > 0 ? this.p.gravityScale : 1;
+    return { grav: grav * scale, yStart };
   }
   _gdTrunc(v) {
     const h = v / 2;
@@ -4410,21 +4797,28 @@ if (this.p.isFlying || this.p.isUfo) {
     return 1.922398;
   }
   updateJump(_0x3d1c6f) {
-    if (!this.p.upKeyDown) {
-      this.p._spiderOrbInputLocked = false;
-    }
-    if (this.p._spiderOrbInputLocked) {
-        this.p.upKeyPressed = false;
-        this.p.queuedHold = false;
-    }
+    this._stepGameEvents();
     if (this.p.pendingVelocity !== null) {
       this.p.yVelocity = this.p.pendingVelocity;
       this.p.pendingVelocity = null;
+    }
+    if (this.p.forceTicks > 0) {
+      this.p.forceTicks--;
+      const fy = this._forceAccum?.y || 0;
+      if (fy !== 0) {
+        this.p.yVelocity += 2 * 0.9 * this._forceModeFactor() * _0x3d1c6f * fy;
+        if (this.p.gravityFlipped ? fy < 0 : fy > 0) this.p.onGround = false;
+      }
+    }
+    if (this._forceAccum) {
+      this._forceAccum.x = 0;
+      this._forceAccum.y = 0;
     }
     if (this.p.isDashing) {
       if (!this.p.upKeyDown) {
         this.p.isDashing = false;
         this.p.dashYVelocity = 0;
+        this._scene?._level?.gameEvent?.(24);
         this.p.yVelocity = 0;
       } else {
         this.p.yVelocity = this.p.dashYVelocity;
@@ -4449,8 +4843,9 @@ if (this.p.isFlying || this.p.isUfo) {
       this._updateRobotJump(_0x3d1c6f);
     } else if (this.p.isSwing) {
       this._updateSwingJump(_0x3d1c6f);
-    } else if (this.p.upKeyDown && this.p.canJump && !this.p._spiderOrbInputLocked) {
+    } else if (this.p.upKeyDown && this.p.canJump) {
       this.p.isJumping = true;
+      this.p._gdLandFlag = false;
       this.p.onGround = false;
       this.p.canJump = false;
       this.p.upKeyPressed = false;
@@ -4458,6 +4853,7 @@ if (this.p.isFlying || this.p.isUfo) {
       this.p.yVelocity = this._gdTrunc(this.flipMod() * this._gdSpeedConsts().yStart * (this.p.isMini ? 0.8 : 1));
       this._applySlopeJumpBoost();
       this.runRotateAction();
+      this._scene?._level?.gameEvent?.(12);
     } else if (this.p.isJumping) {
       this.p.yVelocity = this._gdTrunc(this.p.yVelocity - this._gdSpeedConsts().grav * _0x3d1c6f * this.flipMod());
       if (this.playerIsFalling()) {
@@ -4504,6 +4900,7 @@ if (this.p.isFlying || this.p.isUfo) {
 
     for (const gameObj of nearbyObjects) {
       if (!gameObj || gameObj.type !== jumpRingType || (!gameObj.multiActivate && this._isObjectActivated(gameObj))) continue;
+      if (gameObj.orbId === 3643 && !gameObj.claimTouch) continue;
 
       const hasCircleHitbox = gameObj.hitbox_radius !== undefined && gameObj.hitbox_radius !== null;
       if (hasCircleHitbox) {
@@ -4536,77 +4933,115 @@ if (this.p.isFlying || this.p.isUfo) {
 
     return false;
   }
-  _updateFlyJump(_0x130c46) {
-    const _shipMiniScale = this.p.isMini ? 1.176470588 : 1;
-    let _0x203040 = 0.8;
-    if (this.p.upKeyDown) {
-      _0x203040 = -1;
+  _updateFlyJump(dt) {
+    const f23 = this.p.isMini ? 0.85 : 1;
+    const flip = this.flipMod();
+    const hold = !!this.p.upKeyDown;
+    const up = this.p.yVelocity * flip;
+    if (this.p.gdAccel && ((up >= 0 && up < 16 / f23) || (up <= 0 && up > -12.8 / f23))) {
+      this.p.gdAccel = false;
     }
-    let isFalling = this.p.gravityFlipped ? this.p.yVelocity > p : this.p.yVelocity < p;
-    if (this._scene?._isDual) {
-      if (this.p.gravityFlipped) {
-        isFalling = this.p.yVelocity > p;
-      } else {
-        isFalling = this.p.yVelocity < -p; 
-      }
+    const below = up < 2 * this._gdSpeedConsts().grav;
+    let mult;
+    let k;
+    if (!hold) {
+      mult = this.p.gdAccel ? (up >= 0 ? 0.8 : -1) : 0.8;
+      if (!below) mult = 1.2;
+      k = 0.4;
+    } else {
+      mult = this.p.gdAccel ? (up >= 0 ? 0.8 : -1) : -1;
+      k = below ? 0.5 : 0.4;
     }
-    if (!this.p.upKeyDown && !isFalling && !this.p._slopeBounceActive) {
-      _0x203040 = 1.2;
-    }
-    let _0x2d237f = 0.4;
-    if (this.p.upKeyDown && isFalling) {
-      _0x2d237f = 0.5;
-    }
-    this.p.yVelocity -= p * _0x130c46 * this.flipMod() * _0x203040 * _0x2d237f * _shipMiniScale;
-    if (this.p.upKeyDown) {
+    const gravityScale = this.p.gravityScale > 0 ? this.p.gravityScale : 1;
+    this.p.yVelocity = this._gdTrunc(this.p.yVelocity - flip * k * mult * p * gravityScale * dt / f23);
+    if (hold) {
       this.p.onGround = false;
     }
-    if (!this.p.wasBoosted && !this.p._slopeBounceActive) {
-      if (this.p.gravityFlipped) {
-        this.p.yVelocity = Math.max(this.p.yVelocity, -16 * _shipMiniScale);
-        this.p.yVelocity = Math.min(this.p.yVelocity, 12.8 * _shipMiniScale);
-      } else {
-        this.p.yVelocity = Math.max(this.p.yVelocity, -12.8 * _shipMiniScale);
-        this.p.yVelocity = Math.min(this.p.yVelocity, 16 * _shipMiniScale);
-      }
-    }
-    if (this.p._slopeBounceActive && (isFalling || this.p.onGround)) {
-      this.p._slopeBounceActive = false;
+    if (!this.p.gdAccel) {
+      const upNow = Math.max(-12.8 / f23, Math.min(16 / f23, this.p.yVelocity * flip));
+      this.p.yVelocity = this._gdTrunc(upNow * flip);
     }
   }
   _updateSwingJump(dt) {
-    if (!(dt > 0)) return;
-    const state = this.p;
-    const chi = state.isMini ? 0.85 : 1;
-    const incoming = state.yVelocity * this.flipMod();
-    if (incoming > -12.8 / chi && incoming < 16 / chi) {
-      state.wasBoosted = false;
-      state.gdAccel = false;
+    if (this.p.upKeyPressed && this.p.upKeyDown) {
+      this.p.upKeyPressed = false;
+      this.p.queuedHold = false;
+      this.p.onGround = false;
+      this.flipGravity(!this.p.gravityFlipped, 0.8);
+      this.p.yVelocity = this._gdTrunc(this.p.yVelocity);
+      this._scene?._level?.gameEvent?.(20);
     }
-    if (state._swingFlipPending) {
-      state._swingFlipPending = false;
-      this.flipGravity(!state.gravityFlipped, 0.8);
-      state.onCeiling = false;
-      state.isJumping = false;
-    }
-    if (state.upKeyPressed && !this._isTouchingAvailableOrbForInput(true)) {
-      state._swingFlipPending = true;
-      state.upKeyPressed = false;
-      state.queuedHold = false;
-    }
-    const gravity = 1.916398048 * (state.isMini ? 0.6 : 0.4);
-    state.yVelocity = this._gdTrunc(state.yVelocity - gravity * dt * this.flipMod());
-    if (!state.wasBoosted && !state.gdAccel && !state._slopeBounceActive) {
-      state.yVelocity = Math.max(-16, Math.min(16, state.yVelocity));
-    }
+    const flip = this.flipMod();
+    const gravityScale = this.p.gravityScale > 0 ? this.p.gravityScale : 1;
+    const k = this.p.isMini ? 0.6 : 0.4;
+    this.p.yVelocity = this._gdTrunc(this.p.yVelocity - flip * k * p * gravityScale * dt);
+    this.p.yVelocity = this._gdTrunc(Math.max(-16, Math.min(16, this.p.yVelocity)));
+    this.p.canJump = false;
+    this.p.isJumping = false;
   }
-  updateSwingRotation(dt) {
-    if (!(dt > 0)) return;
-    const aim = this.p.onGround || this.p.onCeiling ? 0 : Math.atan2(-this.p.yVelocity, playerSpeed);
-    this._rotation = this.slerp2D(this._rotation, aim, Math.min(1, 0.15 * dt));
+  _scaleSwingFire(fire, sx, sy, duration, then) {
+    fire.tween = { fromX: fire.sx, fromY: fire.sy, toX: sx, toY: sy, t: 0, duration, then };
+  }
+  _loopSwingFire(fire) {
+    fire.loop = true;
+    this._scaleSwingFire(fire, fire.base * 1.2, fire.base * 1.2, 0.06, () => {
+      this._scaleSwingFire(fire, fire.base * 0.6, fire.base * 1.5, 0.06, () => this._loopSwingFire(fire));
+    });
+  }
+  _startSwingFires() {
+    const fires = this._swingFires;
+    if (!fires) return;
+    fires.middle.sx = fires.middle.sy = fires.middle.base;
+    this._loopSwingFire(fires.middle);
+    fires.top.sx = fires.top.sy = fires.bottom.sx = fires.bottom.sy = 0.01;
+    fires.top.tween = fires.bottom.tween = null;
+    this._updateSwingFireSide();
+  }
+  _updateSwingFireSide() {
+    const fires = this._swingFires;
+    if (!fires || !this.p.isSwing) return;
+    const lit = this.p.gravityFlipped ? fires.bottom : fires.top;
+    const unlit = this.p.gravityFlipped ? fires.top : fires.bottom;
+    lit.loop = false;
+    this._scaleSwingFire(lit, lit.base * 0.6, lit.base * 1.5, 0.06, () => this._loopSwingFire(lit));
+    unlit.loop = false;
+    this._scaleSwingFire(unlit, 0.01, 0.01, 0.4, null);
+  }
+  _syncSwingFire(dt, baseX, baseY, rotation) {
+    const fires = this._swingFires;
+    if (!fires) return;
+    const show = !this.p.isDead && !this._hidden;
+    const mini = this.p.isMini ? 0.6 : 1;
+    const mirror = this.p.mirrored ? -1 : 1;
+    const cos = Math.cos(rotation);
+    const sin = Math.sin(rotation);
+    for (const fire of Object.values(fires)) {
+      let tween = fire.tween;
+      let remaining = dt;
+      while (tween && remaining >= 0) {
+        const step = Math.min(remaining, tween.duration - tween.t);
+        tween.t += step;
+        remaining -= step;
+        const k = tween.duration > 0 ? Math.min(1, tween.t / tween.duration) : 1;
+        fire.sx = tween.fromX + (tween.toX - tween.fromX) * k;
+        fire.sy = tween.fromY + (tween.toY - tween.fromY) * k;
+        if (k < 1) break;
+        fire.tween = null;
+        if (tween.then) tween.then();
+        tween = fire.tween;
+        if (remaining <= 0) break;
+      }
+      const lx = fire.x * mini * mirror;
+      const ly = fire.y * mini;
+      fire.sprite.x = baseX + lx * cos - ly * sin;
+      fire.sprite.y = baseY + lx * sin + ly * cos;
+      fire.sprite.rotation = rotation + fire.angle * mirror;
+      fire.sprite.setScale(fire.sx * mini, fire.sy * mini);
+      fire.sprite.setVisible(show && fire.sx > 0.02);
+    }
   }
   _updateBallJump(_0x2fe319) {
-      const _0x144266 = p * 0.6;
+      const _0x144266 = p * 0.6 * (this.p.gravityScale > 0 ? this.p.gravityScale : 1);
       let prioritizeOrb = this._shouldPrioritizeGroundOrbInput();
 
       if (!prioritizeOrb && this.p.upKeyPressed && this.p.canJump) {
@@ -4618,6 +5053,7 @@ if (this.p.isFlying || this.p.isUfo) {
         this.p.onGround = false;
         this.p.canJump = false;
         this.p.yVelocity *= 0.6;
+        this._scene?._level?.gameEvent?.(19);
          this._skipSlopeExit = true;
         return;
       }
@@ -4676,6 +5112,7 @@ if (this.p.isFlying || this.p.isUfo) {
     if (this.p.upKeyPressed && this.p.canJump) {
       this.p.upKeyPressed = false;
       this.p.isJumping = true;
+      this.p._gdLandFlag = false;
       this.p.onGround = false;
       this.p.canJump = false;
       this.p.queuedHold = false;
@@ -4683,6 +5120,7 @@ if (this.p.isFlying || this.p.isUfo) {
       this.p.robotTouchedPad = false;
       this.p.yVelocity = this._gdTrunc(flip * c.yStart * 0.5 * (this.p.isMini ? 0.8 : 1));
       this._applySlopeJumpBoost();
+      this._scene?._level?.gameEvent?.(13);
       this.p._robotHold = true;
       this._robotJumpFlameActive = true;
       this._robotJumpFlamePulse = 0;
@@ -4731,6 +5169,7 @@ if (this.p.isFlying || this.p.isUfo) {
         this.p.queuedHold = false;
       } else {
         const _ufoJump = this.p.isMini ? 13.6 : 14;
+        this._scene?._level?.gameEvent?.(15);
         if (this.p.yVelocity * flip < _ufoJump) {
           this.p.yVelocity = this._gdTrunc(_ufoJump * flip);
           if (this._slopeExitVel !== null && this._slopeExitVel !== undefined) {
@@ -4745,6 +5184,7 @@ if (this.p.isFlying || this.p.isUfo) {
         this.p.onGround = false;
         this.p.canJump = false;
         this.p.isJumping = true;
+        this.p._gdLandFlag = false;
         try {
           if (!window.enableLDM) {
             this._flyParticle2Emitter.explode(6, this._scene._playerWorldX, b(this.p.y) + (this.p.gravityFlipped ? -18 : 18));
@@ -4753,7 +5193,8 @@ if (this.p.isFlying || this.p.isUfo) {
       }
     }
     const _ufoMult = this.p.yVelocity * flip >= 2 * this._gdSpeedConsts().grav ? 1.2 : 0.8;
-    this.p.yVelocity = this._gdTrunc(this.p.yVelocity - flip * _ufoMult * p * _dt * 0.5 / f23);
+    const gravityScale = this.p.gravityScale > 0 ? this.p.gravityScale : 1;
+    this.p.yVelocity = this._gdTrunc(this.p.yVelocity - flip * _ufoMult * p * gravityScale * _dt * 0.5 / f23);
     if (!this.p.gdAccel) {
       const upNow = Math.max(-12.8 / f23, Math.min(16 / f23, this.p.yVelocity * flip));
       this.p.yVelocity = this._gdTrunc(upNow * flip);
@@ -4905,80 +5346,63 @@ if (this.p.isFlying || this.p.isUfo) {
     return bestSurface;
   }
 
-  _activateSpiderTransport(gameObj, worldX) {
-      const rotation = (Number(gameObj.rotationDegrees) || 0) * Math.PI / 180;
-      const goingUp = Math.cos(rotation) * (gameObj.flipY ? -1 : 1) >= 0;
-      const playerSize = this.p.isWave ? (this.p.isMini ? 6 : 9) : (this.p.isMini ? 18 : 30);
-      const oldY = this.p.y;
-      const surface = this._findSpiderTeleportSurface(
-          goingUp, worldX, playerSize
-      );
-      const landed = Number.isFinite(surface);
-      if (!landed && goingUp) {
-          return this._theresNothingThereTeleport(
-              worldX, playerSize
-          );
+  _spiderTeleport(playerSize) {
+    const playerWorldX = this._scene?._playerWorldX ?? centerX;
+    const goingUp = !this.p.gravityFlipped;
+    const nearestSurfaceY = this._findSpiderTeleportSurface(goingUp, playerWorldX, playerSize);
+
+    if (nearestSurfaceY !== null && Number.isFinite(nearestSurfaceY)) {
+      const oldSpiderTeleportY = this.p.y;
+      const normalLandingY = goingUp ? nearestSurfaceY - playerSize : nearestSurfaceY + playerSize;
+      const blockingHazard = this._findSpiderTeleportHazard(goingUp, playerWorldX, playerSize, normalLandingY);
+
+      if (blockingHazard && !window.noClip) {
+        const hazardCenterY = (blockingHazard.bounds.lower + blockingHazard.bounds.upper) / 2;
+        this.p.y = Number.isFinite(hazardCenterY) ? hazardCenterY : normalLandingY;
+        this._spawnSpiderTeleportEffects(oldSpiderTeleportY, this.p.y);
+        this.p.yVelocity = 0;
+        this.p.onGround = false;
+        this.p.canJump = false;
+        this.p.isJumping = false;
+        this.killPlayer();
+        return false;
       }
-      const targetY = landed ? surface + (goingUp ? -playerSize : playerSize) : oldY;
-      const hazard = landed ? this._findSpiderTeleportHazard(goingUp, worldX, playerSize, targetY) : null;
-      if (hazard && !window.noClip) {
-          this.killPlayer();
-          return false;
-      }
-      if (hazard && window.noClip) {
-          this.p.diedThisFrame = true;
-      }
-      const gravityChanged = this.p.gravityFlipped !== goingUp;
+
+      this.p.y = normalLandingY;
       this.flipGravity(goingUp, 1.0);
-      if (gravityChanged) {
-          this._syncOtherDualGravityForBlueBoost();
-          this.playGravityEffect(goingUp);
+      this.p.onCeiling = goingUp;
+      if (blockingHazard && window.noClip) {
+        this.p._spiderTeleportNoclipDeathPending = true;
+        this.p.diedThisFrame = true;
       }
-
-      this.p.y = targetY;
-      this.p.lastY = targetY;
+      this._spawnSpiderTeleportEffects(oldSpiderTeleportY, this.p.y);
       this.p.yVelocity = 0;
-      this.p.pendingVelocity = null;
-      this.p.isDashing = false;
-      this.p.dashYVelocity = 0;
-      this.p.gdAccel = false;
-
-      this.p.onGround = landed;
-      this.p.onCeiling = landed && goingUp;
-      this.p.canJump = landed;
+      this.p.onGround = true;
+      this.p.canJump = true;
       this.p.isJumping = false;
-
-      this.p.collideTop = 0;
-      this.p.collideBottom = 0;
-
-      this._skipSlopeExit = true;
-      this._lastCollisionWorldY = targetY;
-
-      this._spawnSpiderTeleportEffects(oldY, targetY);
-
-      if (this.p.isWave) {
-          this._waveTrail?.reset();
-      }
-
-      return landed;
+    } else {
+          if (goingUp && this._gameLayer._portalFreeMode) {
+              this._theresNothingThereTeleport(
+                  playerWorldX, playerSize, true
+              );
+              return;
+          }
+      this.flipGravity(goingUp, 1.0);
+      this.p.yVelocity = 0;
+      this.p.onGround = false;
+      this.p.canJump = false;
+      this.p.isJumping = false;
+    }
+    this._scene?._level?.gameEvent?.(18);
+    return true;
   }
-
   _updateSpiderJump(dt) {
     if (!this.rotateActionActive) {
       this.updateGroundRotation(dt);
     }
     const playerSize = this.p.isMini ? 18 : 30;
-    const _gravAmt = p * 0.6;
+    const _gravAmt = p * 0.6 * (this.p.gravityScale > 0 ? this.p.gravityScale : 1);
     const canSpiderTeleport = this.p.canJump || this.p.onGround || this.p.onCeiling;
-
-    if (this.p._spiderOrbHold) {
-      if (!this.p.upKeyDown) {
-        this.p._spiderOrbHold = false;
-      } else if (canSpiderTeleport) {
-        this.p._spiderOrbHold = false;
-        this.p.upKeyPressed = true;
-      }
-    }
 
     let prioritizeOrb = this._shouldPrioritizeGroundOrbInput();
 
@@ -4986,57 +5410,7 @@ if (this.p.isFlying || this.p.isUfo) {
       this.p.upKeyPressed = false;
       this.p.queuedHold = false;
 
-      const playerWorldX = this._scene?._playerWorldX ?? centerX;
-      const goingUp = !this.p.gravityFlipped;
-      const nearestSurfaceY = this._findSpiderTeleportSurface(goingUp, playerWorldX, playerSize);
-
-      if (nearestSurfaceY !== null && Number.isFinite(nearestSurfaceY)) {
-        const oldSpiderTeleportY = this.p.y;
-        const normalLandingY = goingUp ? nearestSurfaceY - playerSize : nearestSurfaceY + playerSize;
-        const blockingHazard = this._findSpiderTeleportHazard(goingUp, playerWorldX, playerSize, normalLandingY);
-
-        if (blockingHazard && !window.noClip) {
-          const hazardCenterY = (blockingHazard.bounds.lower + blockingHazard.bounds.upper) / 2;
-          this.p.y = Number.isFinite(hazardCenterY) ? hazardCenterY : normalLandingY;
-          this._spawnSpiderTeleportEffects(oldSpiderTeleportY, this.p.y);
-          this.p.yVelocity = 0;
-          this.p.onGround = false;
-          this.p.canJump = false;
-          this.p.isJumping = false;
-          this.killPlayer();
-          return;
-        }
-
-        this.p.y = normalLandingY;
-        if (goingUp) {
-          this.flipGravity(true, 1.0);
-          this.p.onCeiling = true;
-        } else {
-          this.flipGravity(false, 1.0);
-          this.p.onCeiling = false;
-        }
-        if (blockingHazard && window.noClip) {
-          this.p._spiderTeleportNoclipDeathPending = true;
-          this.p.diedThisFrame = true;
-        }
-        this._spawnSpiderTeleportEffects(oldSpiderTeleportY, this.p.y);
-        this.p.yVelocity = 0;
-        this.p.onGround = true;
-        this.p.canJump = true;
-        this.p.isJumping = false;
-      } else {
-          if (goingUp && this._gameLayer._portalFreeMode) {
-              this._theresNothingThereTeleport(
-                  playerWorldX, playerSize, true
-              );
-              return;
-          }
-          this.flipGravity(goingUp, 1.0);
-          this.p.yVelocity = 0;
-          this.p.onGround = false;
-          this.p.canJump = false;
-          this.p.isJumping = false;
-      }
+      if (!this._spiderTeleport(playerSize)) return;
 
       this.p._spiderTeleportAnimTimer = 0;
       this._spiderAnimTimer = (this._spiderAnimTimer || 0) + 0.12;
@@ -5203,6 +5577,10 @@ if (this.p.isFlying || this.p.isUfo) {
   checkCollisions(_0x2f5078) {
     this.noclipStats.totalFrames++;
     this.p.diedThisFrame = false;
+    if (this.p.safeHeadTicks > 0) this.p.safeHeadTicks--;
+    if (this.p.flipHeadTicks > 0) this.p.flipHeadTicks--;
+    if (this.p.jBlockTicks > 0) this.p.jBlockTicks--;
+    this._forceIds = null;
     if (this.p._spiderTeleportNoclipDeathPending) {
       this.p.diedThisFrame = true;
       this.p._spiderTeleportNoclipDeathPending = false;
@@ -5329,6 +5707,7 @@ if (this.p.isFlying || this.p.isUfo) {
         const makeportalguide = (_colType.startsWith("portal_") || _colType === "speed") && !this._isObjectActivated(gameObj) && window.enablePortalGuide !== false;
         if (this._isPortalCollisionType(_colType) && !this._isObjectActivated(gameObj)) {
           this._orbpadHitEffect(gameObj);
+          this._objectGameEvent(gameObj, _colType);
         }
         if (_colType === "portal_teleport") {
           if (!this._isObjectActivated(gameObj)) {
@@ -5375,6 +5754,12 @@ if (this.p.isFlying || this.p.isUfo) {
             this.exitUfoMode();
             this.exitSwingMode();
             this.enterShipMode(gameObj);
+          }
+        } else if (_colType === "portal_swing") {
+          if (!this._isObjectActivated(gameObj)) {
+            this._setObjectActivated(gameObj, true);
+            this._playPortalShine(gameObj);
+            this.enterSwingMode(gameObj);
           }
         } else if (_colType === portalWaveType) {
           if (!this._isObjectActivated(gameObj)) {
@@ -5545,7 +5930,7 @@ if (this.p.isFlying || this.p.isUfo) {
           if (!this._isObjectActivated(gameObj)) {
             this._setObjectActivated(gameObj, true);
             this._playPortalShine(gameObj);
-            this._scene._disableDualMode();
+            this._scene._disableDualMode(this);
           }
         } else if (_colType === speedType) {
           if (!this._isObjectActivated(gameObj)) {
@@ -5562,6 +5947,7 @@ if (this.p.isFlying || this.p.isUfo) {
           if (!this._isObjectActivated(gameObj)) {
             this._setObjectActivated(gameObj, true);
             this._orbpadHitEffect(gameObj);
+            this._objectGameEvent(gameObj, _colType);
             const _padId = gameObj.padId;
             if (_padId === 67) {
               const physicsTick = this._scene?._physicsTick;
@@ -5578,11 +5964,18 @@ if (this.p.isFlying || this.p.isUfo) {
             let _padFlip = false;
             let _padNextTickVel = null;
             if (_padId === 3005) {
-                _0x30410f = this._activateSpiderTransport(
-                    gameObj, pieceWidth
-                );
-                if (this.p.isDead) return;
-                _boostedThisStep = true;
+              if (!this._spiderTeleport(playerSize)) continue;
+              this._syncOtherDualGravityForBlueBoost();
+              this.playGravityEffect(this.p.gravityFlipped);
+              if (this.p.isBall) {
+                const gravityDir = this.p.gravityFlipped ? -1 : 1;
+                this.p.ballNormalRotate = this.p.mirrored ? -gravityDir : gravityDir;
+                this.p.ballShouldRotate = true;
+                this.p.ballRotateOpposite = this.p.gravityFlipped;
+                this.p.ballHitPad = true;
+              }
+              this.p.isJumping = false;
+              _boostedThisStep = true;
                 _teleportedThisStep = true;
                 bestSlopeCandidate = null;
                 _slopeKillPending = false;
@@ -5610,6 +6003,7 @@ if (this.p.isFlying || this.p.isUfo) {
               this.p.gdAccel = _padId === 1332 || this.p.isSwing;
               if (this.p.isRobot && String(window.settingsMap?.["kA34"] ?? "0") === "1") this.p.robotTouchedPad = true;
               this.p.isJumping = true;
+              this.p._gdLandFlag = false;
               this.p.onGround = false;
               this.p.canJump = false;
               this.p.yVelocity = this._gdTrunc(_fm * _padVel);
@@ -5652,10 +6046,23 @@ if (this.p.isFlying || this.p.isUfo) {
           const _orbId = gameObj.orbId;
           const _isDash = (_orbId === 1704 || _orbId === 1751);
           const justPressed = this.p.upKeyDown && !this.p.wasUpKeyDown;
-          const _needsClick = !this.p._spiderOrbInputLocked && !_orbInputConsumedThisStep && !this.p._orbActivationConsumedForPress && ((this.p.isFlying || this.p.isUfo || this.p.isSwing) ? justPressed : (justPressed || (this.p.queuedHold && this.p.upKeyDown)));
-          this.p.touchingRing = true;
+          const _needsClick = !_orbInputConsumedThisStep && !this.p._orbActivationConsumedForPress && ((this.p.isFlying || this.p.isUfo || this.p.isWave || this.p.isSwing) ? justPressed : (justPressed || (this.p.queuedHold && this.p.upKeyDown)));
+          if (_orbId !== 3643 || gameObj.claimTouch) this.p.touchingRing = true;
+          if (_orbId === 3643) {
+            if (_needsClick && (gameObj.multiActivate || !this._isObjectActivated(gameObj)) && gameObj._eeTogglePress !== this.p._pressCount) {
+              gameObj._eeTogglePress = this.p._pressCount;
+              this._setObjectActivated(gameObj, true);
+              if (gameObj.claimTouch) {
+                _orbInputConsumedThisStep = true;
+                this._consumeOrbActivationInput();
+              }
+              this._scene?._level?.activateToggleBlock?.(gameObj);
+            }
+            continue;
+          }
           if ((gameObj.multiActivate || !this._isObjectActivated(gameObj)) && _needsClick) {
             this._orbpadHitEffect(gameObj, true);
+            this._objectGameEvent(gameObj, _colType);
             if (_isDash) {
               const dashHoldTicks = this._getDashHoldTicks(gameObj) + 1;
               this._setDashHoldTicks(gameObj, dashHoldTicks);
@@ -5675,6 +6082,7 @@ if (this.p.isFlying || this.p.isUfo) {
                   this._syncOtherDualGravityForBlueBoost();
                 }
                 this.p.isDashing = true;
+                this._scene?._level?.gameEvent?.(23);
                 this.p.dashYVelocity = _dashVelY;
                 this.p.yVelocity = _dashVelY;
                 this.p.onGround = false;
@@ -5707,19 +6115,16 @@ if (this.p.isFlying || this.p.isUfo) {
                 this._syncOtherDualGravityForBlueBoost();
                 _boostedThisStep = true;
                 this._iconEffectBoostTrail = true;
-              } else if (_orbId === 3004) {
-                  _0x30410f = this._activateSpiderTransport(
-                      gameObj, pieceWidth
-                  );
-                  this.p._spiderOrbInputLocked = true;
-                  this.p._spiderOrbHold = false;
-                  this._consumeOrbActivationInput();
-                  if (this.p.isDead) return;
-                  _boostedThisStep = true;
+              } else if (_orbId === 444 || _orbId === 3004) {
+                if (!this._spiderTeleport(this.p.isMini ? 18 : 30)) continue;
+                this.playGravityEffect(this.p.gravityFlipped);
+                this._syncOtherDualGravityForBlueBoost();
+                this.runRotateAction();
+                _boostedThisStep = true;
                   _teleportedThisStep = true;
                   bestSlopeCandidate = null;
                   _slopeKillPending = false;
-                  this._markActivatedOrbSprites(gameObj);
+                this._markActivatedOrbSprites(gameObj);
                   break;
               } else if (this.p.isWave) {
                 if (_orbId === 84 || _orbId === 1022) {
@@ -5772,6 +6177,7 @@ if (this.p.isFlying || this.p.isUfo) {
                 }
                 if (this.p.isSwing) { this.p.gdAccel = true; this.p._swingFlipPending = false; }
                 this.p.isJumping = true;
+                this.p._gdLandFlag = false;
                 this.p.onGround = false;
                 this.p.canJump = false;
                 if (_flipBefore) {
@@ -5824,6 +6230,7 @@ if (this.p.isFlying || this.p.isUfo) {
             }
             this._setObjectActivated(gameObj, true);
             this._orbpadHitEffect(gameObj);
+            if (gameObj.userCoinId !== undefined) this._scene?._level?.gameEvent?.(62);
             try {
               const _coinSpr = this._gameLayer._coinSprites.find(s => s && s.active && Math.abs(s._coinWorldX - gameObj.x) < 2 && Math.abs(s._coinWorldY - gameObj.y) < 2);
               if (_coinSpr && _coinSpr.scene) {
@@ -5874,6 +6281,7 @@ if (this.p.isFlying || this.p.isUfo) {
             gameObj, pieceWidth, playersY, playersLastY, left, right, top, bottom, playerSize, waveHitSize, gamemodeAddition, undefined, _0x198534
           );
           if (slopeResult.died) {
+            if (this.p.safeHeadTicks > 0) continue;
             if (window.noClip) {
               this.p.diedThisFrame = true;
               continue;
@@ -5927,7 +6335,7 @@ if (this.p.isFlying || this.p.isUfo) {
           let _0x869e42 = playersLastY - _solidSize + gamemodeAddition;
           let _0x3e7199 = playersY + _solidSize - gamemodeAddition;
           let _0x135a9d = playersLastY + _solidSize - gamemodeAddition;
-          const _0x55559d = this.p.isWave ? waveHitSize / 3 : 9;
+          const _0x55559d = this.p.isWave ? waveHitSize / 3 : playerSize * 0.3;
           let iscolliding;
           if (_hasCircleHitbox) {
             const _sdx = pieceWidth - gameObj.x;
@@ -5949,8 +6357,8 @@ if (this.p.isFlying || this.p.isUfo) {
                   continue;
               }
               if (this.breakabletheblock(gameObj)) continue;
-              this.killPlayer();
-              return;
+            this.killPlayer();
+            return;
           }
           const _0xLandBot = (this.p.yVelocity <= 0 || this.p.onGround) && (_0x146a97 >= bottom || _0x869e42 >= bottom);
           const _0xLandTop = (this.p.yVelocity >= 0 || this.p.onGround) && (_0x3e7199 <= top || _0x135a9d <= top);
@@ -5971,6 +6379,26 @@ if (this.p.isFlying || this.p.isUfo) {
           const _waveLandTop = this.p.isWave && (this.p.yVelocity >= 0 || this.p.onGround) && _0x3e7199 > top && _0x3e7199 - top <= _waveTol;
           const _landTop = _normalLandTop || _coyoteTop || _skipTop || _waveLandTop;
           const _safeOnSurface = this.p.isWave ? (_landBot || _landTop) : isstandingOnAPlatform;
+          if ((this.p.safeHeadTicks > 0 || this.p.flipHeadTicks > 0) && !this.p.isFlying && !this.p.isWave && !this.p.isUfo && !_safeOnSurface && pieceWidth + _solidSize - 5 > left && pieceWidth - _solidSize + 5 < right) {
+            let hitHead = false;
+            if (!this.p.gravityFlipped && _landTop && this.p.yVelocity > 0) {
+              this.p.y = top - _solidSize;
+              this.p.yVelocity = 0;
+              hitHead = true;
+            } else if (this.p.gravityFlipped && _landBot && this.p.yVelocity < 0) {
+              this.p.y = bottom + _solidSize;
+              this.p.yVelocity = 0;
+              hitHead = true;
+            }
+            if (hitHead) {
+              if (this.p.flipHeadTicks > 0) {
+                this.flipGravity(!this.p.gravityFlipped, 1);
+                this.p.yVelocity = this.p.gravityFlipped ? 4 : -4;
+                if (this.p.jBlockTicks > 0) this._releaseJumpHold();
+              }
+              continue;
+            }
+          }
           const headY = this.p.gravityFlipped ? bottom : top;
           const headCrossing = this.p.gravityFlipped
             ? this.p.yVelocity < 0 && playersLastY - _solidSize >= bottom - 2 && playersY - _solidSize <= bottom
@@ -6046,9 +6474,9 @@ if (this.p.isFlying || this.p.isUfo) {
                 if (window.noClip) {
                   this.p.diedThisFrame = true;
                 } else {
-                  this.killPlayer();
-                  return;
-                }
+                this.killPlayer();
+                return;
+              }
               }
               continue;
             }
@@ -6061,10 +6489,19 @@ if (this.p.isFlying || this.p.isUfo) {
               continue;
             }
           }
+        } else if (_colType === hBlockType) {
+          this.p.safeHeadTicks = 2;
+        } else if (_colType === fBlockType) {
+          this.p.flipHeadTicks = 2;
+        } else if (_colType === jBlockType) {
+          this.p.jBlockTicks = 2;
+        } else if (_colType === forceBlockType) {
+          this._addBlockForce(gameObj, pieceWidth, playersY);
         } else if (_colType === sBlockType) {
           if (this.p.isDashing) {
             this.p.isDashing = false;
             this.p.dashYVelocity = 0;
+            this._scene?._level?.gameEvent?.(24);
           }
         }
       }
@@ -6208,6 +6645,14 @@ if (this.p.isFlying || this.p.isUfo) {
         }
       }
     }
+    if ((this._scene?._inSidewaysStep ? Number(this._scene._playerWorldX) || 0 : this.p.y) > 1890*4) {
+      if (window.noClip) {
+        this.p.diedThisFrame = true;
+      } else {
+        this.killPlayer();
+        return;
+      }
+    }
     if (this._ignoreTeleportUntilClear && !_touchingTeleportDuringRespawnIgnore) {
       this._ignoreTeleportUntilClear = false;
     }
@@ -6272,7 +6717,7 @@ if (this.p.isFlying || this.p.isUfo) {
       let hitboxColor = 65280;
       if (nearObject.type === hazardType) {
         hitboxColor = 16729156;
-      } else if (nearObject.type === "portal_fly" || nearObject.type === "portal_cube" || nearObject.type === "portal_ball" || nearObject.type === "portal_robot" || nearObject.type === portalWaveType || nearObject.type === portalUfoType) {
+      } else if (nearObject.type === "portal_fly" || nearObject.type === "portal_swing" || nearObject.type === "portal_cube" || nearObject.type === "portal_ball" || nearObject.type === "portal_robot" || nearObject.type === portalWaveType || nearObject.type === portalUfoType) {
         hitboxColor = 4491519;
       } else if (nearObject.type === "portal_gravity_down" || nearObject.type === "portal_gravity_up" || nearObject.type === "portal_gravity_toggle") {
         hitboxColor = 16776960;
@@ -6392,8 +6837,8 @@ if (this.p.isFlying || this.p.isUfo) {
             }
 
             graphics.lineStyle(1, hexToHexadecimal("0000ff"), 1);
-            // inner hitbox
-            graphics.strokeRect(trailX - 9, trailY - 9, 18, 18);
+          // inner hitbox
+          graphics.strokeRect(trailX - 9, trailY - 9, 18, 18);
           } else {
             const waveOuter = entrySize === 18 ? 6 : 9;
             const waveInner = waveOuter / 3;
@@ -6441,8 +6886,8 @@ if (this.p.isFlying || this.p.isUfo) {
       }
 
       graphics.lineStyle(2, hexToHexadecimal("0000ff"), 1);
-      // inner hitbox
-      graphics.strokeRect(_playerDrawX - 9, _0x1e788a - 9, 18, 18);
+    // inner hitbox
+    graphics.strokeRect(_playerDrawX - 9, _0x1e788a - 9, 18, 18);
     } else {
       const waveOuter = this.p.isMini ? 6 : 9;
       const waveInner = waveOuter / 3;

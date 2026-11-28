@@ -8,6 +8,15 @@ use crate::physics::speed_portal as sp;
 pub const A: f64 = 60.0;
 const S_BLOCK_OBJECT_ID: i64 = 1829;
 const H_BLOCK_OBJECT_ID: i64 = 1859;
+const J_BLOCK_OBJECT_ID: i64 = 1813;
+const F_BLOCK_OBJECT_ID: i64 = 2866;
+const FORCE_BLOCK_IDS: [i64; 2] = [2069, 3645];
+
+#[derive(Debug, Clone, Copy)]
+pub struct ToggleBlock { pub group: i64, pub activate: bool, pub claim_touch: bool, pub spawn_only: bool }
+
+#[derive(Debug, Clone, Copy)]
+pub struct Force { pub force: f64, pub min: f64, pub max: f64, pub radial: bool, pub range: bool, pub id: i64, pub flip_y: bool }
 
 #[derive(Debug, Clone)]
 pub struct Collider {
@@ -41,6 +50,8 @@ pub struct Collider {
     pub orb_id: Option<i64>,
     pub multi_activate: bool,
     pub free_mode: bool,
+    pub camera_settings: Option<(f64, f64)>,
+    pub toggle: Option<ToggleBlock>,
     pub flip_y: bool,
     pub orb_rotation: Option<f64>,
     pub coin_id: Option<i64>,
@@ -52,6 +63,14 @@ pub struct Collider {
     pub base_rotation_degrees: f64,
     /// A bare `{ type, activated, x: 0, y: 0 }` entry for objects without a collider.
     pub placeholder: bool,
+    pub claim_touch: bool,
+    pub force: f64,
+    pub force_min: f64,
+    pub force_max: f64,
+    pub force_radial: bool,
+    pub force_range: bool,
+    pub force_id: i64,
+    pub force_flip_y: bool,
 }
 
 impl Collider {
@@ -62,8 +81,9 @@ impl Collider {
             hypo_a: (0.0, 0.0), hypo_b: (0.0, 0.0), right_a: (0.0, 0.0), slope_solid_below: true,
             slope_type: None, gd_solid_above: false, gd_wall_on_left: false, hitbox_radius: None, particle_color: None,
             portal_x: None, portal_y: None, teleport_target_x: None, teleport_target_y: None, teleport_y_offset: None,
-            pad_id: None, orb_id: None, multi_activate: false, free_mode: false, flip_y: false, orb_rotation: None, coin_id: None, speed_value: None,
+            pad_id: None, orb_id: None, multi_activate: false, free_mode: false, camera_settings: None, toggle: None, flip_y: false, orb_rotation: None, coin_id: None, speed_value: None,
             speed_id: None, base_x: 0.0, base_y: 0.0, base_rotation_degrees: 0.0, placeholder: false,
+            claim_touch: false, force: 0.0, force_min: 0.0, force_max: 0.0, force_radial: false, force_range: false, force_id: 0, force_flip_y: false,
         }
     }
 
@@ -105,10 +125,18 @@ impl Collider {
         o.field("padId", opt(self.pad_id)); o.field("orbId", opt(self.orb_id));
         o.field("multiActivate", self.multi_activate.to_string());
         o.field("freeMode", self.free_mode.to_string()); o.field("flipY", self.flip_y.to_string());
+        o.field("cameraSettings", self.camera_settings.map_or("null".to_string(), |(e, p)| format!("[{},{}]", num(e), num(p))));
+        let isf = self.ty == "forceblock";
+        let fo = |v: String| if isf { v } else { "null".to_string() };
+        let tb = |f: fn(&ToggleBlock) -> String| self.toggle.as_ref().map_or("null".to_string(), f);
+        o.field("toggleGroup", tb(|t| t.group.to_string())); o.field("toggleActivate", tb(|t| t.activate.to_string()));
+        o.field("claimTouch", tb(|t| t.claim_touch.to_string())); o.field("spawnOnly", tb(|t| t.spawn_only.to_string()));
+        o.field("force", fo(num(self.force))); o.field("forceMin", fo(num(self.force_min))); o.field("forceMax", fo(num(self.force_max)));
+        o.field("forceRadial", fo(self.force_radial.to_string())); o.field("forceRange", fo(self.force_range.to_string())); o.field("forceId", fo(self.force_id.to_string())); o.field("forceFlipY", fo(self.force_flip_y.to_string()));
         o.field("orbRotation", of(self.orb_rotation));
         o.field("coinId", opt(self.coin_id));
         o.field("speedValue", of(self.speed_value)); o.field("speedId", opt(self.speed_id));
-        o.field("_baseX", num(self.base_x)); o.field("_baseY", num(self.base_y)); o.field("_baseRotationDegrees", num(self.base_rotation_degrees));
+        o.field("_baseX", num(self.base_x)); o.field("_baseY", num(self.base_y)); if self.toggle.is_none() { o.field("_baseRotationDegrees", num(self.base_rotation_degrees)); }
         o.finish()
     }
 }
@@ -263,7 +291,21 @@ pub fn spawn_colliders(o: &LevelObject) -> Option<Vec<Collider>> {
     // Standalone exit portals (749) are only spawned through `_normalizeTeleportPortals`, which isn't ported yet.
     if id == 749 { return None; }
     let def: &ObjectDef = object_from_id(id)?;
-    if def.ty == Some("trigger") { return None; }
+    if id == 3643 {
+        let flag = |k: &str| raw(o, k).map(|s| s.as_str()).unwrap_or("0") == "1";
+        let sc = or0(o.scale);
+        let size = 60.0 * (if sc == 0.0 { 1.0 } else { sc });
+        let mut c = Collider::new("jump_ring", o.x * 2.0, o.y * 2.0, size, size, 0.0);
+        c.orb_id = Some(3643);
+        c.multi_activate = flag("99");
+        c.claim_touch = flag("445");
+        c.toggle = Some(ToggleBlock { group: raw(o, "51").and_then(|s| crate::js::parse_int(s)).unwrap_or(0), activate: flag("56"), claim_touch: flag("445"), spawn_only: flag("504") });
+        let mut c = c.register();
+        c.base_x = c.x; c.base_y = c.y;
+        return Some(vec![c]);
+    }
+    if crate::objects::is_trigger_branch(id) { return None; }
+    if def.ty == Some("trigger") && id != J_BLOCK_OBJECT_ID && !FORCE_BLOCK_IDS.contains(&id) { return None; }
     let (wx, wy) = (o.x * 2.0, o.y * 2.0);
     let no_touch = raw(o, "121").map(|s| s.as_str()) == Some("1");
     let (hx, hy) = { let (x, y) = gd_object_scale(o); (x.abs(), y.abs()) };
@@ -285,8 +327,22 @@ pub fn spawn_colliders(o: &LevelObject) -> Option<Vec<Collider>> {
         let mut c = Collider::new("dblock", wx, wy, gw * A * hx, gh * A * hy, rot);
         c.objid = o.id;
         out.push(c.register());
-    } else if !no_touch && (id == S_BLOCK_OBJECT_ID || id == H_BLOCK_OBJECT_ID) && grid_ok {
-        let mut c = Collider::new(if id == H_BLOCK_OBJECT_ID { "hblock" } else { "sblock" }, wx, wy, gw * A * hx, gh * A * hy, rot);
+    } else if !no_touch && FORCE_BLOCK_IDS.contains(&id) {
+        let fnum = |k: &str| match raw(o, k) { Some(s) => crate::js::parse_float(s).filter(|v| v.is_finite()).unwrap_or(0.0), None => 0.0 };
+        let flag = |k: &str| raw(o, k).map(|s| s.as_str()) == Some("1");
+        let mut c = Collider::new("forceblock", wx, wy, gw * A * hx, gh * A * hy, rot);
+        c.objid = o.id;
+        if let Some(r) = def.hitbox_radius { if r != 0.0 { c.hitbox_radius = Some(r * 2.0 * hmean); } }
+        c.force = fnum("149");
+        c.force_min = fnum("526");
+        c.force_max = fnum("527");
+        c.force_radial = flag("528");
+        c.force_range = flag("529");
+        c.force_id = raw(o, "530").and_then(|s| crate::js::parse_float(s)).map(|v| v.trunc() as i64).filter(|v| *v != 0).unwrap_or(0);
+        c.force_flip_y = flag("5");
+        out.push(c.register());
+    } else if !no_touch && (id == S_BLOCK_OBJECT_ID || id == H_BLOCK_OBJECT_ID || id == F_BLOCK_OBJECT_ID || id == J_BLOCK_OBJECT_ID) && grid_ok {
+        let mut c = Collider::new(if id == H_BLOCK_OBJECT_ID { "hblock" } else if id == F_BLOCK_OBJECT_ID { "fblock" } else if id == J_BLOCK_OBJECT_ID { "jblock" } else { "sblock" }, wx, wy, gw * A * hx, gh * A * hy, rot);
         c.objid = o.id;
         out.push(c.register());
     } else if !no_touch && def.ty == Some("hazard") {
@@ -325,6 +381,10 @@ pub fn spawn_colliders(o: &LevelObject) -> Option<Vec<Collider>> {
             c.portal_x = Some(wx);
             c.portal_y = Some(wy);
             c.free_mode = raw(o, "111").map(|s| s.as_str()).unwrap_or("0") == "1";
+            if raw(o, "112").map(|s| s.as_str()).unwrap_or("0") == "1" {
+                let finite = |k: &str| raw(o, k).and_then(|s| crate::js::parse_float(s)).filter(|v| v.is_finite()).unwrap_or(0.0);
+                c.camera_settings = Some((finite("113").min(40.0).max(1.0), finite("114").min(1.0).max(0.0)));
+            }
             if is_tp {
                 let y_off = teleport_y_offset(o);
                 c.teleport_target_x = Some(wx);

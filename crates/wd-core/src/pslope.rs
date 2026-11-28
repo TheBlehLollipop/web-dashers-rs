@@ -48,7 +48,7 @@ impl<'a> Sim<'a> {
         let wall_right = wall_left + wall_w;
         let box_bot = c.y - half_h;
         let box_top = c.y + half_h;
-        let inner = if self.p.is_wave { if self.p.is_mini { 2.0 } else { 3.0 } } else { 9.0 };
+        let inner = if self.p.is_wave { if self.p.is_mini { 2.0 } else { 3.0 } } else if self.p.is_mini { 5.4 } else { 9.0 };
         (piece_width + inner > wall_left) && (piece_width - inner < wall_right) && (players_y + inner > box_bot) && (players_y - inner < box_top)
     }
 

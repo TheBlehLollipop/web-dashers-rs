@@ -85,12 +85,21 @@ export function createGL(canvas) {
   };
   const P = new Float64Array(16);
   let cx = 0, cy = 0, cc = 1, cs = 0, cSx = 1, cSy = 1, ck = 0, ctw = 1, cth = 1;
+  let vOn = false, vA = 1, vB = 0, vX = 0, vY = 0;
   const corner = (px, py, u, v) => { // local point -> screen, with its texture coordinate
     const ax = px * cSx, ay = py * cSy;
-    P[ck++] = cx + ax * cc - ay * cs; P[ck++] = cy + ax * cs + ay * cc; P[ck++] = u / ctw; P[ck++] = v / cth;
+    let x = cx + ax * cc - ay * cs, y = cy + ax * cs + ay * cc;
+    if (vOn) { const dx = x - vX, dy = y - vY; x = vX + dx * vA - dy * vB; y = vY + dx * vB + dy * vA; }
+    P[ck++] = x; P[ck++] = y; P[ck++] = u / ctw; P[ck++] = v / cth;
   };
 
   const api = {
+    /** the world camera's zoom and rotation (degrees) around the screen centre; `view(1, 0)` turns it off */
+    view(zoom, deg) {
+      vOn = zoom !== 1 || deg !== 0;
+      const r = deg * Math.PI / 180;
+      vA = zoom * Math.cos(r); vB = zoom * Math.sin(r); vX = W / 2; vY = H / 2;
+    },
     begin(shakeX, shakeY) {
       offX = shakeX || 0; offY = shakeY || 0; n = 0; runStart = 0; runs.length = 0; curTex = null; curBlend = -1;
       gl.viewport(0, 0, canvas.width, canvas.height);

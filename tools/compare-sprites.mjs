@@ -54,7 +54,7 @@ for (let li = 0; li < files.length; li++) {
   const js = [];
   for (const lo of normalized) {
     const def = ctx.getObjectFromId(lo.id);
-    if (def && def.type === ctx.triggerType) { L._nextObjectId++; js.push([]); continue; }
+    if (def && def.type === ctx.triggerType && ![1813, 2069, 3645].includes(Number(lo.id))) { L._nextObjectId++; js.push([]); continue; }
     const b = created.length;
     L._spawnObject(lo);
     js.push(created.slice(b).filter((c) => c.kind === "image" && !c._eeEditorTrigger).map(snap));

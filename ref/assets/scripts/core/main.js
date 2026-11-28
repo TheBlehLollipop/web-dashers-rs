@@ -38,7 +38,7 @@ if (window.gameCache) {
     }, 3000);
   }
 }
-l(Math.round(screenHeight * 16 / 9));
+l(getDynamicScreenWidth());
 const phaserConfig = {
   type: Phaser.AUTO,
   width: screenWidth,

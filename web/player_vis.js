@@ -469,7 +469,7 @@
             this.items.push({ ...it, x: sx + dx, y: sy + dy, rot: e.startRot + spin, alpha, screen: true });
           }
         }
-        streakSetPos(this.streak, wx, T - gy); this.streak.speed = p.speed;
+        streakSetPos(this.streak, wx, T - gy);
         streakUpdate(this, dtMs / 1000);
         if (tl >= 1) { streakStop(this.streak); streakReset(this.streak); }
       }

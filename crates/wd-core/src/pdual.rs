@@ -17,7 +17,8 @@ pub fn reset_state(p: &mut Player) {
     p.mirrored = false; p.is_dashing = false; p.dash_y_velocity = 0.0; p.ignore_portals = false; p.robot_hold = false; p.robot_hold_timer = 0.0;
     p.spider_teleport_noclip_death_pending = false; p.ball_should_rotate = false; p.ball_rotate_opposite = false; p.ball_normal_rotate = 0.86;
     p.ball_hit_pad = false; p.ball_rotation2 = 0.86;
-    p.swing_flip_pending = false; p.spider_orb_input_locked = false;
+    p.gravity_scale = 1.0;
+    p.gd_fall_start_y = None; p.gd_land_flag = true; p.gd_prev_fall_vel = None; p.gd_was_falling = false; p.gd_prev_held = None; p.gd_prev_ceiling = false;
 }
 
 /// `PlayerObject.reset()`; `world_x` is the scene's `_playerWorldX`.
@@ -27,7 +28,7 @@ pub fn reset_object(p: &mut Player, world_x: f64) {
     p.gd_slope_rotation = 0.0; p.slope_launch_spin = false; p.prev_slope_obj = None; p.prev_slope_angle = f64::NAN; p.active_slope_obj = None;
     p.active_slope_angle = None; p.on_slope_angle = None; p.slope_entry_x = None;
     p.rotate_action_active = false; p.rotate_action_time = 0.0; p.rotation = 0.0;
-    p.robot_hold = false; p.robot_hold_timer = 0.0; p.spider_orb_hold = false;
+    p.robot_hold = false; p.robot_hold_timer = 0.0;
     p.last_collision_world_x = if world_x.is_finite() { Some(world_x) } else { None };
     p.last_collision_world_y = if p.y.is_finite() { Some(p.y) } else { None };
     p.ignore_teleport_until_clear = false;
@@ -118,7 +119,6 @@ impl<'a> Sim<'a> {
     }
 
     fn skip_ball_sync(from: &Player, to: &Player, o: SyncOpts) -> bool {
-        if from.is_swing && to.is_swing && to.swing_flip_pending && !o.force { return true; }
         if !from.is_ball { return false; }
         if o.force { return false; }
         if o.skip_ball_input { return true; }
@@ -180,13 +180,13 @@ impl<'a> Sim<'a> {
         let saved = (self.p.y, self.p.y_velocity, self.p.gravity_flipped, self.p.up_key_down, self.p.up_key_pressed, self.p.queued_hold, self.p.orb_activation_consumed_for_press, self.p.mirrored, self.p.is_mini);
         let y = saved.0;
         match mode {
-            "swing" => self.enter_swing_mode(Some(y), true),
-            "ship" => self.enter_ship_mode(Some(y), true),
-            "ball" => self.enter_ball_mode(Some(y)),
-            "ufo" => self.enter_ufo_mode(Some(y), true),
-            "wave" => self.enter_wave_mode(Some(y)),
+            "swing" => self.enter_swing_mode(Some(y), true, false),
+            "ship" => self.enter_ship_mode(Some(y), true, false),
+            "ball" => self.enter_ball_mode(Some(y), false),
+            "ufo" => self.enter_ufo_mode(Some(y), true, false),
+            "wave" => self.enter_wave_mode(Some(y), false),
             "robot" => self.enter_robot_mode(true),
-            "spider" => self.enter_spider_mode(Some(y), true),
+            "spider" => self.enter_spider_mode(Some(y), true, false),
             _ => {
                 self.exit_swing_mode(); self.exit_ship_mode(); self.exit_ball_mode(); self.exit_ufo_mode(); self.exit_wave_mode(); self.exit_robot_mode(); self.exit_spider_mode();
                 self.p.is_flying = false; self.p.is_swing = false; self.p.is_ball = false; self.p.is_ufo = false; self.p.is_wave = false; self.p.is_robot = false; self.p.is_spider = false;
@@ -296,6 +296,17 @@ impl<'a> Sim<'a> {
     pub fn disable_dual_mode(&mut self) {
         if self.other.is_none() { self.log.push("dual:off".into()); return; }
         if !self.e.is_dual { return; }
+        if self.e.second_player && !self.p.is_dead {
+            let mode = mode_id(self.p);
+            self.run_as(false, |s| s.set_player_gamemode(mode, true));
+            let (s2y, s2last, s2ground, s2vel, s2flip, s2mini, s2on_ground, s2on_ceiling, s2can_jump, s2jumping) = {
+                let p = &*self.p;
+                (p.y, p.last_y, p.last_ground_pos_y, p.y_velocity, p.gravity_flipped, p.is_mini, p.on_ground, p.on_ceiling, p.can_jump, p.is_jumping)
+            };
+            let (p1, _) = self.pair();
+            p1.y = s2y; p1.last_y = s2last; p1.last_ground_pos_y = s2ground; p1.y_velocity = s2vel; p1.gravity_flipped = s2flip; p1.is_mini = s2mini;
+            p1.on_ground = s2on_ground; p1.on_ceiling = s2on_ceiling; p1.can_jump = s2can_jump; p1.is_jumping = s2jumping;
+        }
         self.e.is_dual = false;
         self.e.dual_ball_overlap_resolved = false;
         self.e.dual_ball_spawn_lock = false;

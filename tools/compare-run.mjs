@@ -43,6 +43,8 @@ let respawns = 0, checkpointsSaved = 0, wonRuns = 0, overrideFrames = 0, dualFra
 const PRACTICE = !!process.env.PRACTICE; // practice mode: random checkpoints, respawn from them after deaths (needs CAMERA=1)
 const CAMERA = !!process.env.CAMERA; // also compare the camera, end-of-level detection and the whole-frame update
 const PORTAL = !!process.env.PORTAL;
+const SIDEWAYS = !!process.env.SIDEWAYS; // sideways gameplay (rotate gameplay ground 3/4) switched on and off between frames
+const swapSrc = fs.readFileSync(root + "ref/assets/scripts/core/game-scene.js", "utf8");
 const OPTS = !!process.env.OPTS; // restarts go through the level options / start positions like _restartLevel
 let portalLevels = null;
 for (let r = 0; r < RUNS; r++) {
@@ -73,7 +75,7 @@ for (let r = 0; r < RUNS; r++) {
   // ---- original JS
   const L = Object.create(ctx.LevelObject.prototype);
   Object.assign(L, { _collisionSections: [], _nearbyBuffer: [], _flyCeilingY: null, _flyFloorY: 0, _flyGroundActive: false, _flyVisualOnly: false, _groundTargetValue: 0,
-    _flyVisualFloorInset: 0, _flyVisualCeilingInset: 0, tryCollectSecretCoin: () => true, tryCollectUserCoin: () => true, _coinSprites: [], _orbSprites: [] });
+    _flyVisualFloorInset: 0, _flyVisualCeilingInset: 0, tryCollectSecretCoin: () => true, tryCollectUserCoin: () => true, _coinSprites: [], _orbSprites: [], _persistentItems: new Set(), _persistentTimers: new Set(), resetGenericTriggers() {} });
   cols.forEach((c) => L._addCollisionToSection(c));
   const { o, finish } = jsPlayer(v, cols);
   const v2 = { ...v, "e.second_player": 1, is_dead: 1 };
@@ -86,6 +88,11 @@ for (let r = 0; r < RUNS; r++) {
   w.wd_game_set_state(ptr);
   const S = Object.assign({}, o._scene);
   for (const k of Object.getOwnPropertyNames(sceneMethods)) if (k !== "constructor") S[k] = sceneMethods[k];
+  if (SIDEWAYS) {
+    const a = swapSrc.indexOf("  _swapSidewaysFrame() {"), b = swapSrc.indexOf("  _rotateGameplay(", a);
+    S._swapSidewaysFrame = (0, eval)(`(class { ${swapSrc.slice(a, b)} })`).prototype._swapSidewaysFrame;
+    L.gameplaySideways = false; w.wd_set_sideways(0);
+  }
   const held = { v: false };
   ctx.window.kbIsDown = () => held.v;
   Object.assign(S, {
@@ -132,7 +139,7 @@ for (let r = 0; r < RUNS; r++) {
     const jsM = JSON.parse(JSON.stringify(S._macroBot.exportObject())), rsM = rustMacro();
     const d = [];
     if (jsM.frames.length !== rsM.frames.length) d.push(`frame count: rust=${rsM.frames.length} js=${jsM.frames.length}`);
-    const KEYS = ["y", "lastY", "lastGroundPosY", "yVelocity", "onGround", "canJump", "isJumping", "gravityFlipped", "isFlying", "isBall", "isWave", "isUfo", "isSpider", "isBird", "isDart", "isRobot", "isSwing", "isJetpack", "isMini", "wasBoosted", "gdAccel", "robotAccel", "robotTouchedPad", "_slopeBounceActive", "pendingVelocity", "collideTop", "collideBottom", "onCeiling", "upKeyDown", "upKeyPressed", "queuedHold", "_orbActivationConsumedForPress", "isDead", "mirrored", "isDashing", "dashYVelocity", "isDual", "ignorePortals", "_robotHold", "_robotHoldTimer", "_spiderTeleportNoclipDeathPending", "ballShouldRotate", "ballRotateOpposite", "ballNormalRotate", "ballHitPad", "ballRotation2"];
+    const KEYS = ["y", "lastY", "lastGroundPosY", "yVelocity", "onGround", "canJump", "isJumping", "gravityFlipped", "isFlying", "isBall", "isWave", "isUfo", "isSpider", "isBird", "isDart", "isRobot", "isSwing", "isJetpack", "isMini", "wasBoosted", "gdAccel", "robotAccel", "robotTouchedPad", "_slopeBounceActive", "pendingVelocity", "collideTop", "collideBottom", "onCeiling", "upKeyDown", "upKeyPressed", "queuedHold", "_orbActivationConsumedForPress", "isDead", "mirrored", "isDashing", "dashYVelocity", "isDual", "ignorePortals", "_robotHold", "_robotHoldTimer", "_spiderTeleportNoclipDeathPending", "ballShouldRotate", "ballRotateOpposite", "ballNormalRotate", "ballHitPad", "ballRotation2", "_gdFallStartY", "_gdLandFlag", "_gdPrevFallVel", "gravityScale", "_gdWasFalling", "_gdPrevHeld", "_gdPrevCeiling", "_pressCount", "forceTicks", "safeHeadTicks", "flipHeadTicks", "jBlockTicks"];
     const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     for (let i = 0; i < Math.min(jsM.frames.length, rsM.frames.length) && d.length < 6; i++) {
       const a = jsM.frames[i], b = rsM.frames[i];
@@ -186,12 +193,14 @@ for (let r = 0; r < RUNS; r++) {
         enter(gm, 30);
         S._applyLevelStartOptions();
       }
+      if (CAMERA) S._updateCameraY(0, true);
       startInfo += ` opts=${JSON.stringify(so)}`;
     } else {
       ctx.vm.runInContext(`playerSpeed = ${SPEEDS[sk]};`, ctx.vmContext);
       L.resetGroundState();
       enter(gm, 30);
     }
+    if (SIDEWAYS) { L.gameplaySideways = false; L._sidewaysWorldX = 0; S._inSidewaysStep = false; }
     const slog = useRestartLevel ? w.wd_game_restart_level(startPosIdx) : isRestart ? w.wd_game_restart(sk, gm, startX) : w.wd_game_start(sk, gm, startX);
     const out0 = finish(); const jl = out0.__log.slice(); o.__log.length = 0;
     const rl = slog ? new TextDecoder().decode(new Uint8Array(w.memory.buffer, w.wd_result_ptr(), slog)).split("|") : [];
@@ -235,6 +244,11 @@ for (let r = 0; r < RUNS; r++) {
     if (rnd() < 0.12) hold = !hold;
     const delta = process.env.DELTA ? Number(process.env.DELTA) : pick([16.6667, 16.6667, 16.6667, 16, 17, 33.3, 8, 20]);
     // JS
+    if (SIDEWAYS && !S._isDual && rnd() < (L.gameplaySideways ? 0.01 : 0.02)) {
+      L.gameplaySideways = !L.gameplaySideways; w.wd_set_sideways(L.gameplaySideways ? 1 : 0);
+      globalThis.__sidewaysToggles = (globalThis.__sidewaysToggles || 0) + 1;
+    }
+    if (SIDEWAYS && L.gameplaySideways) globalThis.__sidewaysFrames = (globalThis.__sidewaysFrames || 0) + 1;
     if (process.env.DUAL && START && rnd() < (S._isDual ? 0.004 : 0.01)) { // switch dual mode on / off between frames
       const on = !S._isDual;
       if (on) S._enableDualMode(); else S._disableDualMode();
@@ -259,7 +273,8 @@ for (let r = 0; r < RUNS; r++) {
     const qd = S._physicsBlock(delta);
     if (CAMERA) {
       S._cameraBlock(qd);
-      if (S._state.isSwing) o.updateSwingRotation(qd); else if (S._state.isFlying) o.updateShipRotation(qd);
+      if (S._state.isFlying || S._state.isSwing) o.updateShipRotation(qd);
+      if (S._isDual && (S._state2.isFlying || S._state2.isSwing) && !S._state2.isDead) o2.updateShipRotation(qd);
     }
     vmSet: { const out = finish(); out.__logNow = out.__log.slice(); o.__log.length = 0;
       out.floor = L.getFloorY(); out.ceil = L.getCeilingY() ?? NaN; out.db = S._deltaBuffer; out.pf = S._physicsFrame; globalThis.__js = out; }
@@ -352,5 +367,6 @@ for (let r = 0; r < RUNS; r++) {
 console.log("modes seen (frames):", JSON.stringify(modeSeen), "\neffects:", JSON.stringify(effects));
 console.log(`${checkpointsSaved} checkpoints, ${respawns} respawns from checkpoints; ${wonRuns} levels completed, ${overrideFrames} frames of the end camera; ${restarts} restarts after deaths, ${dualFrames} frames in dual mode`);
 if (MACRO) console.log(`macro frames recorded ${macroStats.frames} (${macroStats.dual} dual), frames played back ${macroStats.played}`);
+if (SIDEWAYS) console.log(`sideways: ${globalThis.__sidewaysToggles || 0} toggles, ${globalThis.__sidewaysFrames || 0} frames sideways`);
 console.log(`${runsDone} runs, ${totalFrames} frames, ${deaths} deaths: ${bad ? bad + " MISMATCHED" : "all identical"}`);
 process.exit(bad ? 1 : 0);

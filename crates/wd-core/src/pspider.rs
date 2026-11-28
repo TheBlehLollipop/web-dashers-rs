@@ -78,70 +78,62 @@ impl<'a> Sim<'a> {
         best
     }
 
-    pub fn update_spider_jump(&mut self, dt: f64, cols: &[Col]) {
-        if !self.p.rotate_action_active { self.update_ground_rotation(dt); }
-        let player_size = if self.p.is_mini { 18.0 } else { 30.0 };
-        let grav_amt = P * 0.6;
-        let can_teleport = self.p.can_jump || self.p.on_ground || self.p.on_ceiling;
-        if self.p.spider_orb_hold {
-            if !self.p.up_key_down {
-                self.p.spider_orb_hold = false;
-            } else if can_teleport {
-                self.p.spider_orb_hold = false;
-                self.p.up_key_pressed = true;
-            }
-        }
-        let prioritize_orb = self.should_prioritize_ground_orb_input();
-        if !prioritize_orb && self.p.up_key_pressed && can_teleport {
-            self.p.up_key_pressed = false;
-            self.p.queued_hold = false;
-            let world_x = self.e.player_world_x;
-            let going_up = !self.p.gravity_flipped;
-            let nearest = self.find_spider_teleport_surface(going_up, world_x, player_size, cols);
-            if let Some(surface) = nearest.filter(|v| v.is_finite()) {
-                let old_teleport_y = self.p.y;
-                let normal_landing_y = if going_up { surface - player_size } else { surface + player_size };
-                let blocking = self.find_spider_teleport_hazard(going_up, world_x, player_size, normal_landing_y, cols);
-                if blocking.is_some() && !self.g.no_clip {
-                    let b = blocking.unwrap();
-                    let hazard_center_y = (b.lower + b.upper) / 2.0;
-                    self.p.y = if hazard_center_y.is_finite() { hazard_center_y } else { normal_landing_y };
-                    self.vlog.push(format!("tp:{},{}", old_teleport_y, self.p.y));
-                    self.p.y_velocity = 0.0;
-                    self.p.on_ground = false;
-                    self.p.can_jump = false;
-                    self.p.is_jumping = false;
-                    self.kill_player();
-                    return;
-                }
-                self.p.y = normal_landing_y;
-                if going_up {
-                    self.flip_gravity(true, 1.0);
-                    self.p.on_ceiling = true;
-                } else {
-                    self.flip_gravity(false, 1.0);
-                    self.p.on_ceiling = false;
-                }
-                if blocking.is_some() && self.g.no_clip {
-                    self.p.spider_teleport_noclip_death_pending = true;
-                    self.p.died_this_frame = true;
-                }
+    pub(crate) fn spider_teleport(&mut self, player_size: f64, cols: &[Col]) -> bool {
+        let world_x = self.e.player_world_x;
+        let going_up = !self.p.gravity_flipped;
+        let nearest = self.find_spider_teleport_surface(going_up, world_x, player_size, cols);
+        if let Some(surface) = nearest.filter(|v| v.is_finite()) {
+            let old_teleport_y = self.p.y;
+            let normal_landing_y = if going_up { surface - player_size } else { surface + player_size };
+            let blocking = self.find_spider_teleport_hazard(going_up, world_x, player_size, normal_landing_y, cols);
+            if blocking.is_some() && !self.g.no_clip {
+                let b = blocking.unwrap();
+                let hazard_center_y = (b.lower + b.upper) / 2.0;
+                self.p.y = if hazard_center_y.is_finite() { hazard_center_y } else { normal_landing_y };
                 self.vlog.push(format!("tp:{},{}", old_teleport_y, self.p.y));
-                self.p.y_velocity = 0.0;
-                self.p.on_ground = true;
-                self.p.can_jump = true;
-                self.p.is_jumping = false;
-            } else {
-                if going_up && self.e.portal_free_mode {
-                    self.theres_nothing_there_teleport(world_x, player_size, true, cols);
-                    return;
-                }
-                self.flip_gravity(going_up, 1.0);
                 self.p.y_velocity = 0.0;
                 self.p.on_ground = false;
                 self.p.can_jump = false;
                 self.p.is_jumping = false;
+                self.kill_player();
+                return false;
             }
+            self.p.y = normal_landing_y;
+            self.flip_gravity(going_up, 1.0);
+            self.p.on_ceiling = going_up;
+            if blocking.is_some() && self.g.no_clip {
+                self.p.spider_teleport_noclip_death_pending = true;
+                self.p.died_this_frame = true;
+            }
+            self.vlog.push(format!("tp:{},{}", old_teleport_y, self.p.y));
+            self.p.y_velocity = 0.0;
+            self.p.on_ground = true;
+            self.p.can_jump = true;
+            self.p.is_jumping = false;
+        } else {
+            if going_up && self.e.portal_free_mode {
+                self.theres_nothing_there_teleport(world_x, player_size, true, cols);
+                return false;
+            }
+            self.flip_gravity(going_up, 1.0);
+            self.p.y_velocity = 0.0;
+            self.p.on_ground = false;
+            self.p.can_jump = false;
+            self.p.is_jumping = false;
+        }
+        true
+    }
+
+    pub fn update_spider_jump(&mut self, dt: f64, cols: &[Col]) {
+        if !self.p.rotate_action_active { self.update_ground_rotation(dt); }
+        let player_size = if self.p.is_mini { 18.0 } else { 30.0 };
+        let grav_amt = P * 0.6 * self.gravity_scale();
+        let can_teleport = self.p.can_jump || self.p.on_ground || self.p.on_ceiling;
+        let prioritize_orb = self.should_prioritize_ground_orb_input();
+        if !prioritize_orb && self.p.up_key_pressed && can_teleport {
+            self.p.up_key_pressed = false;
+            self.p.queued_hold = false;
+            if !self.spider_teleport(player_size, cols) { return; }
             self.p.spider_teleport_anim_timer = 0.0;
             self.p.spider_flash_duration = 0.5;
             self.p.spider_flash_timer = 0.5;

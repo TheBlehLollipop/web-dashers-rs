@@ -631,6 +631,34 @@ class LevelEditor {
   }
 
 
+  _swapSidewaysFrame() {
+    const x = this._playerWorldX;
+    this._playerWorldX = this._state.y;
+    this._state.y = x;
+    this._inSidewaysStep = !this._inSidewaysStep;
+  }
+
+  _rotateGameplay(trig) {
+    const level = this._level;
+    const state = this._state;
+    if (!level || !state || state.isDead || this._isDual) return;
+    const sideways = trig.ground === 3 || trig.ground === 4;
+    const flipped = trig.ground === 1 || trig.ground === 4;
+    const reversed = trig.move === 2 || trig.move === 3;
+    let velocity = playerSpeed;
+    if (trig.editVelocity) velocity = trig.overrideVelocity ? trig.velocityModY * 2 : velocity * trig.velocityModY;
+    level.gameplaySideways = sideways;
+    if ((level.direction < 0) !== reversed) {
+      level.direction = reversed ? -1 : 1;
+      level._directionDirty = true;
+    }
+    if (!!state.gravityFlipped !== flipped) this._player.flipGravity(flipped, 1);
+    state.yVelocity = velocity;
+    state.onGround = false;
+    state.onCeiling = false;
+    state.canJump = false;
+  }
+
   _resetEditorPlaytestLevelState() {
     this._level.resetObjects();
     this._level.resetGroundState();
@@ -655,6 +683,9 @@ class LevelEditor {
     this._level.resetCountTriggers?.();
     this._level.resetCollisionTriggers?.();
     this._level.resetInstantCountTriggers?.();
+    this._level.resetGenericTriggers();
+    this._level._sidewaysWorldX = 0;
+    this._inSidewaysStep = false;
     this._level.resetTimeWarpTriggers();
     this._level.checkToggleTriggers?.(0);
     this._level.checkPickupTriggers?.(0, this._colorManager);
@@ -1308,7 +1339,7 @@ class LevelEditor {
     if (!this._editorPlaytestActive || this._editorPlaytestPaused) return;
 
     this._audio.update(deltaTime / 1000);
-    deltaTime *= this._level._timeWarp;
+    deltaTime *= this._level.timeWarp || 1;
     this._state.mirrored = false;
     this._state2.mirrored = false;
     this._bg.setFlipX(false);
@@ -1321,7 +1352,7 @@ class LevelEditor {
 
     const subStepDelta = subSteps > 0 ? quantizedDelta / subSteps : 0;
     const verticalDelta = subStepDelta * d;
-    const horizontalDelta = subStepDelta * playerSpeed * d;
+    const horizontalDelta = subStepDelta * playerSpeed * d * (this._level?.direction < 0 ? -1 : 1);
     const initialY = this._state.y;
     const initialY2 = this._state2.y;
     const previousNoClip = window.noClip;
@@ -1330,6 +1361,11 @@ class LevelEditor {
 
     try {
         for (let i = 0; i < subSteps; i++) {
+            const sidewaysStep = !!this._level?.gameplaySideways && !this._isDual;
+            if (sidewaysStep) {
+                this._level._sidewaysWorldX = this._playerWorldX;
+                this._swapSidewaysFrame();
+            }
             this._state.lastY = this._state.y;
             this._physicsFrame++;
             this._physicsTick = (this._physicsTick || 0) + 1;
@@ -1360,6 +1396,7 @@ class LevelEditor {
             }
 
             this._playerWorldX += horizontalDelta;
+            if (sidewaysStep) this._swapSidewaysFrame();
 
             if (this._isDual && !this._state2.isDead) {
                 this._copyDualInputFlags?.(dualInputState, this._state2);
@@ -1474,6 +1511,7 @@ class LevelEditor {
             }
             this._level.beginGroupTransformBatch();
             this._level.stepMoveTriggers(subStepDelta / 60);
+            this._level.updateGenericTriggers(playerX, this._state.y, this._isDual && !this._state2.isDead ? this._state2.y : null, subStepDelta / 60, this._colorManager);
             this._level.stepSpawnTriggers(subStepDelta / 60, this._colorManager);
             this._level.checkAlphaTriggers(playerX);
             if (this._level.checkTouchAlphaTriggers) {
@@ -1607,8 +1645,14 @@ class LevelEditor {
     this._state.ignorePortals = false;
     this._state2.ignorePortals = false;
 
-    this._cameraX = this._playerWorldX - centerX;
+    this._cameraX = this._playerWorldX - centerX + (this._level.cameraOffsetX || 0) + (this._level.gameplayOffsetX || 0);
+    this._cameraY += this._level._appliedCameraOffsetY || 0;
+    this._cameraY += this._level._appliedGameplayOffsetY || 0;
     this._updateEditorPlaytestCameraY(quantizedDelta);
+    this._level._appliedCameraOffsetY = this._level.cameraOffsetY || 0;
+    this._cameraY -= this._level._appliedCameraOffsetY;
+    this._level._appliedGameplayOffsetY = this._level.gameplayOffsetY || 0;
+    this._cameraY -= this._level._appliedGameplayOffsetY;
     this._cameraXRef._v = this._cameraX;
 
     this._level.additiveContainer.x = -this._cameraX;
@@ -1627,14 +1671,10 @@ class LevelEditor {
     window.BeastAnim.update(this, deltaTime);
     this._refreshEditorPlaytestGlowVisibility();
 
-    if (this._state.isSwing) {
-        this._player.updateSwingRotation(quantizedDelta);
-    } else if (this._state.isFlying) {
+    if (this._state.isFlying || this._state.isSwing) {
         this._player.updateShipRotation(quantizedDelta);
     }
-    if (this._isDual && this._state2.isSwing && !this._state2.isDead) {
-        this._player2.updateSwingRotation(quantizedDelta);
-    } else if (this._isDual && this._state2.isFlying && !this._state2.isDead) {
+    if (this._isDual && (this._state2.isFlying || this._state2.isSwing) && !this._state2.isDead) {
         this._player2.updateShipRotation(quantizedDelta);
     }
 
@@ -3543,16 +3583,18 @@ class LevelEditor {
     if (key === "kA6") {
         window._backgroundId = String(numericValue).padStart(2, "0");
 
-        const bgKey = "game_bg_" + getBackgroundTextureIndex(numericValue);
+        const bgId = window._backgroundId;
 
-        if (this._bg && this.textures.exists(bgKey)) {
+        this._ensureBackgroundTexture(getBackgroundTextureIndex(numericValue), (bgKey) => {
+            if (!this._bg || window._backgroundId !== bgId) return;
             this._bg.setTexture(bgKey);
             const newBgH = this.textures.get(bgKey).source?.[0]?.height;
 
             if (newBgH) {
                 this._bgInitY = newBgH - screenHeight - o;
             }
-        }
+            this._releaseUnusedBackgrounds(bgKey);
+        });
     } else if (key === "kA7") {
         window._groundId = getGroundTextureId(numericValue);
 
@@ -4356,6 +4398,18 @@ class LevelEditor {
 
 
   _openEditorColorPickerPopup(channelId, labelText, onColorChanged, pickerOptions = {}) {
+    const pickerSheet = "CCControlColourPickerSpriteSheet-uhd";
+    if (!this.textures.exists(pickerSheet)) {
+      if (this._colourPickerSheetLoading) return;
+      this._colourPickerSheetLoading = true;
+      this.load.atlas(pickerSheet, "assets/ui-graphics/sheets/" + pickerSheet + ".png", "assets/ui-graphics/sheets/" + pickerSheet + ".json");
+      this.load.once("filecomplete-atlasjson-" + pickerSheet, () => {
+        this._colourPickerSheetLoading = false;
+        this._openEditorColorPickerPopup(channelId, labelText, onColorChanged, pickerOptions);
+      });
+      if (!this.load.isLoading()) this.load.start();
+      return;
+    }
     this._closeEditorColorPickerPopup();
 
     const sw = screenWidth;

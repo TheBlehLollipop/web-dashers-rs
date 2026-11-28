@@ -13,7 +13,10 @@ window.currentShip   = localStorage.getItem("iconCurrentShip")   || "ship_01";
 window.currentBall   = localStorage.getItem("iconCurrentBall")   || "player_ball_01";
 window.currentWave   = localStorage.getItem("iconCurrentWave")   || "dart_01";
 window.currentSpider = localStorage.getItem("iconCurrentSpider") || "spider_01";
+window.currentSwing  = localStorage.getItem("iconCurrentSwing")  || "swing_01";
 window.currentBird   = localStorage.getItem("iconCurrentBird")   || "bird_01";
+Object.defineProperty(window, "glowColor", { configurable: true, get: () => window.iconGlowColor, set: v => { window.iconGlowColor = v; } });
+Object.defineProperty(window, "glowEnabled", { configurable: true, get: () => window.iconGlowEnabled, set: v => { window.iconGlowEnabled = v; } });
 window.currentSwing = localStorage.getItem("iconCurrentSwing") || "swing_01";
 const readIconEffectID = (key, max) => {
   const value = Number(localStorage.getItem(key));

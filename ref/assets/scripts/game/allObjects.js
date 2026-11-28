@@ -237,6 +237,7 @@ window.allobjects = function() {
   },
   "15": {
     "can_color": true,
+    "default_base_color_channel": 1005,
     "type": "deco",
     "frame": "rod_01_001.png",
     "gridW": 0,
@@ -260,6 +261,7 @@ window.allobjects = function() {
   },
   "16": {
     "can_color": true,
+    "default_base_color_channel": 1005,
     "type": "deco",
     "frame": "rod_02_001.png",
     "gridW": 0,
@@ -283,6 +285,7 @@ window.allobjects = function() {
   },
   "17": {
     "can_color": true,
+    "default_base_color_channel": 1005,
     "type": "deco",
     "frame": "rod_03_001.png",
     "gridW": 0,
@@ -735,8 +738,8 @@ window.allobjects = function() {
     "default_z_order": 9
   },
   "50": {
-    "can_color": true,
     "default_base_color_channel": 1006,
+    "can_color": true,
     "blend": "additive",
     "type": "deco",
     "frame": "none",
@@ -756,8 +759,8 @@ window.allobjects = function() {
     ],
   },
   "51": {
-    "can_color": true,
     "default_base_color_channel": 1006,
+    "can_color": true,
     "type": "deco",
     "frame": "none",
     "gridW": 0,
@@ -776,8 +779,8 @@ window.allobjects = function() {
     ]
   },
   "52": {
-    "can_color": true,
     "default_base_color_channel": 1006,
+    "can_color": true,
     "type": "deco",
     "frame": "none",
     "gridW": 0,
@@ -796,8 +799,8 @@ window.allobjects = function() {
     ]
   },
   "53": {
-    "can_color": true,
     "default_base_color_channel": 1006,
+    "can_color": true,
     "type": "deco",
     "frame": "none",
     "gridW": 0,
@@ -920,8 +923,8 @@ window.allobjects = function() {
     "enterEffect": 11
   },
   "60": {
-    "can_color": true,
     "default_base_color_channel": 1006,
+    "can_color": true,
     "type": "deco",
     "frame": "none",
     "gridW": 0,
@@ -3767,8 +3770,8 @@ window.allobjects = function() {
     "default_z_order": 9
   },
   "236": {
-    "audioPulse": true,
     "blend": "additive",
+    "audioPulse": true,
     "can_color": true,
     "default_base_color_channel": 1006,
     "frame": "d_circle_01_001.png",
@@ -32120,17 +32123,19 @@ window.allobjects = function() {
     "editorFrame": "edit_eOnDeathBtn_001.png"
   },
   "1813": {
-    "can_color": true,
-    "default_base_color_channel": 1004,
-    "frame": "blockOutline_01_001.png",
+    "can_color": false,
+    "default_base_color_channel": 0,
+    "frame": "edit_eStopJumpBtn_001.png",
+    "glow_frame": "none",
     "gridH": 1,
     "gridW": 1,
-    "spritesheet": "GJ_GameSheet-uhd",
-    "type": "deco",
+    "spritesheet": "GJ_GameSheet02-uhd",
+    "type": "trigger",
     "z": 2,
     "default_detail_color_channel": -1,
     "default_z_layer": 5,
-    "default_z_order": 2
+    "default_z_order": 2,
+    "editorFrame": "edit_eStopJumpBtn_001.png"
   },
   "1814": {
     "can_color": false,

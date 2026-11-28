@@ -48,6 +48,9 @@ impl<'a> Sim<'a> {
         }
     }
     fn fly_on(&mut self, y: f64, height: f64) { self.set_fly_bounds(true, y, Some(height), None); }
+    fn fly_on_portal(&mut self, y: f64, height: f64, free_mode: bool) {
+        if free_mode { self.set_fly_bounds(false, 0.0, None, None); } else { self.fly_on(y, height); }
+    }
     fn fly_off(&mut self) { self.set_fly_bounds(false, 0.0, None, None); }
     fn glitter(&mut self, on: bool) { self.log.push(format!("glitter:{}", on)); }
 
@@ -64,7 +67,7 @@ impl<'a> Sim<'a> {
             self.fly_off();
         }
     }
-    pub fn enter_ship_mode(&mut self, portal_y: Option<f64>, from_checkpoint: bool) {
+    pub fn enter_ship_mode(&mut self, portal_y: Option<f64>, from_checkpoint: bool, free_mode: bool) {
         if self.p.is_flying { return; }
         self.exit_swing_mode();
         self.exit_spider_mode(); self.exit_robot_mode(); self.exit_ball_mode(); self.exit_wave_mode();
@@ -77,9 +80,9 @@ impl<'a> Sim<'a> {
         self.stop_rotation();
         self.p.rotation = 0.0;
         let spawn_y = portal_y.unwrap_or(self.p.y);
-        self.fly_on(spawn_y, F);
+        self.fly_on_portal(spawn_y, F, free_mode);
     }
-    pub fn enter_ball_mode(&mut self, portal_y: Option<f64>) {
+    pub fn enter_ball_mode(&mut self, portal_y: Option<f64>, free_mode: bool) {
         if self.p.is_ball { return; }
         self.exit_swing_mode();
         self.exit_spider_mode(); self.exit_robot_mode(); self.exit_wave_mode();
@@ -95,7 +98,7 @@ impl<'a> Sim<'a> {
         self.stop_rotation();
         self.p.rotation = 0.0;
         let y = portal_y.unwrap_or(self.p.y);
-        self.fly_on(y, F - A * 2.0);
+        self.fly_on_portal(y, F - A * 2.0, free_mode);
     }
     pub fn exit_ball_mode(&mut self) {
         if !self.p.is_ball { return; }
@@ -112,7 +115,7 @@ impl<'a> Sim<'a> {
         self.p.rotation = 0.0;
         self.fly_off();
     }
-    pub fn enter_wave_mode(&mut self, portal_y: Option<f64>) {
+    pub fn enter_wave_mode(&mut self, portal_y: Option<f64>, free_mode: bool) {
         if self.p.is_wave { return; }
         self.exit_swing_mode();
         self.exit_spider_mode(); self.exit_robot_mode(); self.exit_ship_mode(); self.exit_ball_mode();
@@ -124,7 +127,7 @@ impl<'a> Sim<'a> {
         self.stop_rotation();
         self.p.rotation = 0.0;
         let y = portal_y.unwrap_or(self.p.y);
-        self.fly_on(y, F);
+        self.fly_on_portal(y, F, free_mode);
     }
     pub fn exit_wave_mode(&mut self) {
         if !self.p.is_wave { return; }
@@ -137,7 +140,7 @@ impl<'a> Sim<'a> {
         self.p.rotation = 0.0;
         self.fly_off();
     }
-    pub fn enter_spider_mode(&mut self, portal_y: Option<f64>, from_portal: bool) {
+    pub fn enter_spider_mode(&mut self, portal_y: Option<f64>, from_portal: bool, free_mode: bool) {
         if self.p.is_spider { return; }
         self.exit_swing_mode();
         let portal_vy = if from_portal { Some(self.p.y_velocity) } else { None };
@@ -157,13 +160,12 @@ impl<'a> Sim<'a> {
         self.p.rotation = 0.0;
         let y = portal_y.unwrap_or(self.p.y);
         let fly_h = A.max(F - A);
-        self.set_fly_bounds(true, y, Some(fly_h), Some(fly_h));
+        if free_mode { self.set_fly_bounds(false, 0.0, None, None); } else { self.set_fly_bounds(true, y, Some(fly_h), Some(fly_h)); }
         if let Some(v) = saved { self.p.y_velocity = v; }
     }
     pub fn exit_spider_mode(&mut self) {
         if !self.p.is_spider { return; }
         self.p.is_spider = false;
-        self.p.spider_orb_hold = false;
         self.p.y_velocity = 0.0;
         self.p.on_ground = false;
         self.p.can_jump = false;
@@ -207,7 +209,7 @@ impl<'a> Sim<'a> {
         self.p.rotation = 0.0;
         self.fly_off();
     }
-    pub fn enter_ufo_mode(&mut self, portal_y: Option<f64>, from_checkpoint: bool) {
+    pub fn enter_ufo_mode(&mut self, portal_y: Option<f64>, from_checkpoint: bool, free_mode: bool) {
         if self.p.is_ufo { return; }
         self.exit_swing_mode();
         self.exit_spider_mode(); self.exit_robot_mode(); self.exit_ball_mode(); self.exit_wave_mode(); self.exit_ship_mode();
@@ -220,7 +222,7 @@ impl<'a> Sim<'a> {
         self.stop_rotation();
         self.p.rotation = 0.0;
         let y = portal_y.unwrap_or(self.p.y);
-        self.fly_on(y, F);
+        self.fly_on_portal(y, F, free_mode);
     }
     pub fn exit_ufo_mode(&mut self) {
         if !self.p.is_ufo { return; }
@@ -235,16 +237,10 @@ impl<'a> Sim<'a> {
         self.fly_off();
     }
 
-    pub fn enter_swing_mode(&mut self, portal_y: Option<f64>, from_checkpoint: bool) {
-        if self.p.is_swing {
-            if let Some(y) = portal_y { self.fly_on(y, F); }
-            return;
-        }
+    pub fn enter_swing_mode(&mut self, portal_y: Option<f64>, from_checkpoint: bool, free_mode: bool) {
+        if self.p.is_swing { return; }
         self.exit_ship_mode(); self.exit_ball_mode(); self.exit_wave_mode(); self.exit_ufo_mode(); self.exit_spider_mode(); self.exit_robot_mode();
         self.p.is_swing = true;
-        self.p.on_ceiling = false;
-        self.p.swing_flip_pending = false;
-        self.glitter(true);
         if !from_checkpoint { self.p.y_velocity *= 0.5; }
         self.p.on_ground = false;
         self.p.can_jump = false;
@@ -252,15 +248,12 @@ impl<'a> Sim<'a> {
         self.stop_rotation();
         self.p.rotation = 0.0;
         let spawn_y = portal_y.unwrap_or(self.p.y);
-        self.fly_on(spawn_y, F);
+        self.fly_on_portal(spawn_y, F, free_mode);
     }
     pub fn exit_swing_mode(&mut self) {
         if !self.p.is_swing { return; }
         self.p.is_swing = false;
-        self.p.on_ceiling = false;
-        self.p.swing_flip_pending = false;
-        self.glitter(false);
-        if !self.p.slope_riding { self.p.y_velocity *= 0.5; }
+        self.p.y_velocity *= 0.5;
         self.p.on_ground = false;
         self.p.can_jump = false;
         self.p.is_jumping = false;

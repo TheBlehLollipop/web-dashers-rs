@@ -10,6 +10,7 @@ const a2 = src.indexOf("  reset() {");
 vm.runInContext(`this.Meter = class Meter {
   constructor() { this._meterValue = 0.1; this._lastAudio = 0.1; this._lastPeak = 0; this._silenceCounter = 0; this._meteringEnabled = true; this._vol = 1; this._cur = 0; this._analyser = { getFloatTimeDomainData: (b) => { b.fill(0); b[3] = this._cur; } }; this._meterBuffer = new Float32Array(16); }
   _effectiveVolume() { return this._vol; }
+  _stepTriggerSong() {}
 ${src.slice(a0, a1)}
 ${src.slice(a1, src.indexOf("  reset() {"))}
 };`, ctx);

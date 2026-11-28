@@ -29,7 +29,7 @@ const levels = fs.readdirSync(root + "ref/assets/levels").filter((f) => f.endsWi
 if (process.env.EXTRA) {
   // synthetic levels with the V2.1 objects (swing portal, spider pad/orb, head blocks, flipped pads/orbs, free-mode portals, rotated spikes)
   const SLOPE_IDS = [289, 291, 299, 305, 315, 321, 324, 326, 333, 337, 363, 366, 369];
-  const IDS = [1, 1, 1, 1829, 1859, 1859, 8, 8, 39, 103, 392, 35, 67, 140, 1332, 3005, 3005, 36, 84, 141, 1022, 1333, 1330, 1594, 3004, 3004, 1704, 1751, 12, 13, 47, 660, 111, 745, 1331, 1933, 1933, 286, 287, 10, 11, 99, 101, 200, 201, 202, 203, ...SLOPE_IDS];
+  const IDS = [1, 1, 1, 1829, 1859, 1859, 8, 8, 39, 103, 392, 35, 67, 140, 1332, 3005, 3005, 36, 84, 141, 1022, 1333, 1330, 1594, 3004, 3004, 1704, 1751, 12, 13, 47, 660, 111, 745, 1331, 1933, 1933, 286, 287, 10, 11, 99, 101, 200, 201, 202, 203, 1813, 1813, 2866, 2866, 2069, 2069, 3645, 3645, 3643, ...SLOPE_IDS];
   const synth = [];
   for (let k = 0; k < 40; k++) {
     const objs = [];
@@ -37,13 +37,20 @@ if (process.env.EXTRA) {
       const id = pick(IDS);
       const rot = rnd() < 0.5 ? 0 : pick([90, 180, 270, 45, 30, -90]);
       const flipY = id >= 35 && id !== 8 && rnd() < 0.5 ? 1 : 0;
-      objs.push(`1,${id},2,${Math.floor(rnd() * 500)},3,${Math.floor(rnd() * 300) + 15},6,${rot},4,${rnd() < 0.2 ? 1 : 0},5,${flipY},111,${rnd() < 0.5 ? 1 : 0},99,${rnd() < 0.3 ? 1 : 0}`);
+      objs.push(`1,${id},2,${Math.floor(rnd() * 500)},3,${Math.floor(rnd() * 300) + 15},6,${rot},4,${rnd() < 0.2 ? 1 : 0},5,${flipY},111,${rnd() < 0.5 ? 1 : 0},99,${rnd() < 0.3 ? 1 : 0},149,${pick([0, 1, -1, 3.5, -2.25, 8])},526,${pick([0, -4, 2.5])},527,${pick([0, 5, -1.5, 7])},528,${rnd() < 0.4 ? 1 : 0},529,${rnd() < 0.5 ? 1 : 0},530,${pick([0, 0, 1, 2, 3])},445,${rnd() < 0.5 ? 1 : 0}`);
     }
     const lvl = ctx.parseLevel("kA4,0;" + objs.join(";"));
     const cols = [];
     for (const lo of lvl.objects) {
       const def = ctx.getObjectFromId(lo.id);
-      if (!def || def.type === ctx.triggerType) continue;
+      const bid = parseInt(lo.id, 10);
+      if (bid === 3643) {
+        const tb = new ctx.Collider("jump_ring", lo.x * 2, lo.y * 2, 60, 60, 0);
+        tb.orbId = 3643; tb.multiActivate = String(lo._raw?.[99]) === "1"; tb.claimTouch = String(lo._raw?.[445]) === "1";
+        cols.push(tb);
+        continue;
+      }
+      if (!def || (def.type === ctx.triggerType && bid !== 1813 && bid !== 2069 && bid !== 3645)) continue;
       const self = { objects: [], objectSprites: {}, _groupColliders: {}, _addCollisionToSection() {}, _getTeleportPortalYOffset: ctx.tpOffset, _secretCoinCompleted: new Set(), _userCoinCompleted: new Set() };
       ctx.spawnCol.call(self, lo, def, lo.x * 2, lo.y * 2, parseInt(lo.id ?? 0, 10), 0, 0, 0, null);
       for (const c of self.objects) if (c instanceof ctx.Collider) cols.push(c);
@@ -78,6 +85,7 @@ for (let t = 0; t < N; t++) {
     else v[f.name] = 0;
   }
   v["e.macro_playing"] = 0; // (a random bool field otherwise)
+  v["e.has_level_events"] = 0;
   Object.assign(v, {
     y: py, last_y: py - (rnd() * 2 - 1) * pick([0.5, 4, 16]), y_velocity: pick([0, rnd() * 40 - 20, -22.36, 22.36, rnd() * 4 - 2]),
     is_mini: +mini, gravity_flipped: +flipped, on_ground: rnd() < 0.4 ? 1 : 0, up_key_down: rnd() < 0.5 ? 1 : 0, was_up_key_down: rnd() < 0.5 ? 1 : 0,
@@ -89,6 +97,11 @@ for (let t = 0; t < N; t++) {
   for (const m of ["is_flying", "is_wave", "is_ball", "is_ufo", "is_spider", "is_robot", "is_swing"]) v[m] = 0;
   const mode = pick(["cube", "cube", "cube", "fly", "wave", "ball", "ufo", "robot", "spider"]);
   if (mode !== "cube") v["is_" + (mode === "fly" ? "flying" : mode)] = 1;
+  if (process.env.EXTRA) {
+    v.gravity_scale = pick([1, 1, 1, 0.5, 2, -1, 0]); v.force_ticks = pick([0, 0, 1, 2]); v.force_acc_x = pick([0, 3]); v.force_acc_y = pick([0, 0, rnd() * 10 - 5]);
+    v.safe_head_ticks = pick([0, 0, 1, 2]); v.flip_head_ticks = pick([0, 0, 1, 2]); v.j_block_ticks = pick([0, 0, 1, 2]); v.press_count = pick([NaN, 0, 1, 2]);
+    v["e.in_sideways_step"] = rnd() < 0.2 ? 1 : 0;
+  }
   v.queued_hold = rnd() < 0.4 ? 1 : 0; v.up_key_pressed = rnd() < 0.4 ? 1 : 0; v.ignore_portals = rnd() < 0.1 ? 1 : 0; v.ignore_teleport_until_clear = rnd() < 0.2 ? 1 : 0;
   if (rnd() < 0.1) v.is_swing = 1;
   if (rnd() < 0.3 && near.length) { const l = pick(near); v.last_land_object = l.uid; v.last_land_x = l.x; v.last_land_y = l.y; v.last_land_ty = TYPES.indexOf(l.type); }
@@ -112,6 +125,7 @@ for (let t = 0; t < N; t++) {
   const dt = pick([0.9 / 240, 0.9 / 960, rnd() * 0.05, 0.0037]);
   if (CALL === "jump") { for (const m of ["is_flying", "is_wave", "is_ball", "is_ufo", "is_spider", "is_robot"]) v[m] = 0; v["is_" + pick(["spider", "spider", "spider", "ball", "ufo", "robot", "flying"])] = 1; v.is_dashing = 0; v.pending_velocity = NaN; }
   const isJump = CALL === "jump";
+  if (isJump) v["e.orb_touch"] = +H.jsPlayer(v, near).o._isTouchingAvailableOrbForInput(false);
 
   const cloneCol = (c) => Object.assign(Object.create(Object.getPrototypeOf(c)), c, { _activatedByPlayer: c._activatedByPlayer && { ...c._activatedByPlayer }, _dashHoldTicksByPlayer: c._dashHoldTicksByPlayer && { ...c._dashHoldTicksByPlayer } });
   const pre = near.map(cloneCol);

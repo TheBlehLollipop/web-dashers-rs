@@ -39,6 +39,7 @@ pub mod pslope;
 pub mod pspider;
 pub mod game;
 pub mod triggers;
+pub mod generic;
 pub mod pdual;
 pub mod jsonread;
 pub mod visual;
@@ -195,6 +196,7 @@ pub unsafe extern "C" fn wd_game_set_state(ptr: *mut f64) {
     let gm = guard.as_mut().unwrap();
     let mut it = a.iter().copied();
     gm.p.unpack(&mut it); gm.g.unpack(&mut it); gm.e.unpack(&mut it);
+    gm.e.has_level_events = true;
 }
 
 /// Runs one frame; returns the length of the log (`|`-joined) left in the result buffer.
@@ -255,7 +257,8 @@ fn out_str(s: String) -> usize { let mut o = OUT.lock().unwrap(); *o = s.into_by
 /// Builds the whole game (colliders and triggers) from a level string; returns the number of colliders.
 #[no_mangle]
 pub unsafe extern "C" fn wd_game_load_level(ptr: *const u8, len: usize) -> usize {
-    let input = String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned();
+    let mut input = String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned();
+    if input.contains('\0') { input = input.replace('\0', "").trim().to_string(); }
     let lvl = level::parse_level(&input);
     let official = *OFFICIAL.lock().unwrap();
     let mut g = game::Game::from_level_official(&lvl, official);
@@ -298,8 +301,25 @@ pub extern "C" fn wd_trig_frame(px: f64, py: f64, cx: f64, cy: f64, dt: f64, has
     });
 }
 #[no_mangle]
+pub extern "C" fn wd_cam_step(cx: f64, py: f64, flags: u32, q: f64, out: *mut f64) {
+    with_game(|g| {
+        g.camera_x = cx + triggers::or0(g.trig.gen.camera_offset.0) + triggers::or0(g.trig.gen.gameplay_offset.0);
+        g.p.y = py;
+        g.p.gravity_flipped = flags & 1 != 0; g.p.is_flying = flags & 2 != 0; g.p.is_ufo = flags & 4 != 0; g.p.is_wave = flags & 8 != 0;
+        g.p.is_ball = flags & 16 != 0; g.p.is_swing = flags & 32 != 0; g.p.is_spider = flags & 64 != 0;
+        g.camera_y_block(q);
+        unsafe { *out = g.camera_x; *out.add(1) = g.camera_y; }
+    });
+}
+#[no_mangle]
+pub extern "C" fn wd_set_rotate_gameplay(on: u32) { with_game(|g| g.rotate_gameplay_enabled = on != 0); }
+#[no_mangle]
+pub extern "C" fn wd_set_sideways(on: u32) { with_game(|g| { g.trig.gen.gameplay_sideways = on != 0; g.sync_floor_ceiling(); }); }
+#[no_mangle]
+pub extern "C" fn wd_cam_reset() { with_game(|g| { g.camera_y = 0.0; g.follow_camera_y = None; }); }
+#[no_mangle]
 pub extern "C" fn wd_trig_reset(which: u32) {
-    with_game(|g| match which { 0 => g.reset_move(), 1 => g.reset_rotate(), 2 => g.reset_toggle(), 3 => g.reset_spawn(), 4 => g.reset_stop(), 5 => g.reset_follow_y(), 6 => g.reset_follow(), 13 => g.reset_color(), 14 => g.reset_pulse(), 15 => g.reset_channel_blending(), 16 => g.cm.reset(), 17 => g.reset_alpha(), 18 => { g.reset_shake(); g.reset_player_vis(); g.reset_animation(); g.reset_enter_effect() } 19 => g.reset_time_warp(), 7 => g.reset_on_death(), 8 => g.reset_touch(), 9 => g.reset_pickup(), 10 => g.reset_count(), 11 => g.reset_instant_count(), _ => g.reset_collision() });
+    with_game(|g| match which { 0 => g.reset_move(), 1 => g.reset_rotate(), 2 => g.reset_toggle(), 3 => g.reset_spawn(), 4 => g.reset_stop(), 5 => g.reset_follow_y(), 6 => g.reset_follow(), 13 => g.reset_color(), 14 => g.reset_pulse(), 15 => g.reset_channel_blending(), 16 => g.cm.reset(), 17 => g.reset_alpha(), 18 => { g.reset_shake(); g.reset_player_vis(); g.reset_animation(); g.reset_enter_effect() } 19 => g.reset_generic(false), 7 => g.reset_on_death(), 8 => g.reset_touch(), 9 => g.reset_pickup(), 10 => g.reset_count(), 11 => g.reset_instant_count(), _ => g.reset_collision() });
 }
 /// Collision sections (`{index: [collider indices]}`) and the disabled colliders.
 #[no_mangle]
@@ -310,6 +330,12 @@ pub extern "C" fn wd_trig_sections() -> usize {
         format!("{{\"sections\":{{{}}},\"length\":{},\"disabled\":[{}]}}", secs.join(","), g.sections_len, dis.join(","))
     }))
 }
+#[no_mangle]
+pub extern "C" fn wd_game_event(event: f64, extra: f64, extra2: f64) { with_game(|g| g.game_event(event as i64, extra as i64, extra2 as i64)); }
+#[no_mangle]
+pub extern "C" fn wd_toggle_block(ci: f64) { with_game(|g| g.activate_toggle_block(ci as usize)); }
+#[no_mangle]
+pub extern "C" fn wd_trig_attempts(v: f64) { with_game(|g| g.trig.gen.attempts = v); }
 #[no_mangle]
 pub extern "C" fn wd_trig_death() { with_game(|g| g.trigger_on_death()); }
 #[no_mangle]
@@ -548,7 +574,7 @@ pub unsafe extern "C" fn wd_visual_level(ptr: *const u8, len: usize) -> usize {
     let mut b = visual::Builder::new(atlases, &mut rng);
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     for o in &objects {
-        let is_trigger = matches!(objects::object_from_id(o.id.unwrap_or(0)), Some(d) if d.ty == Some("trigger"));
+        let is_trigger = objects::is_trigger_branch(o.id.unwrap_or(0));
         if is_trigger { b.next_object_id += 1; ranges.push((0, 0)); continue; }
         let r = b.spawn(o);
         ranges.push((r.start, r.end));
@@ -603,7 +629,7 @@ pub unsafe extern "C" fn wd_visual_tints(ptr: *const u8, len: usize) -> usize {
     let mut rng = || { let mut g = SPRITE_RNG.lock().unwrap(); let s = g.get_or_insert(12345); *s = s.wrapping_mul(1664525).wrapping_add(1013904223); *s as f64 / 4294967296.0 };
     let mut b = visual::Builder::new(atlases, &mut rng);
     for o in &objects {
-        if matches!(objects::object_from_id(o.id.unwrap_or(0)), Some(d) if d.ty == Some("trigger")) { b.next_object_id += 1; continue; }
+        if objects::is_trigger_branch(o.id.unwrap_or(0)) { b.next_object_id += 1; continue; }
         b.spawn(o);
     }
     let cm = CM.lock().unwrap();
@@ -726,7 +752,7 @@ fn attach_level_sprites_ed(level: &level::Level, g: &mut game::Game, official: u
     for o in &objects {
         // level.js `ldm_object`: Low Detail Mode leaves these decorations out
         if ldm && LDM_OBJECTS.contains(&(o.id.unwrap_or(0))) { let n = b.sprites.len() as u32; obj_ranges.push((n, n)); continue; }
-        let is_trigger = matches!(objects::object_from_id(o.id.unwrap_or(0)), Some(d) if d.ty == Some("trigger"));
+        let is_trigger = objects::is_trigger_branch(o.id.unwrap_or(0));
         if is_trigger {
             let linked = b.next_object_id;
             b.next_object_id += 1;

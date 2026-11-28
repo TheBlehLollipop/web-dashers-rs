@@ -100,6 +100,9 @@ slots! {
         pub fly_camera_target: Option<f64> = None,
         pub portal_free_mode: bool = false,
         pub dual_bounds_center_y: Option<f64> = None,
+        pub in_sideways_step: bool = false,
+        pub stop_jump_latch: bool = false,
+        pub has_level_events: bool = false,
     }
 }
 
@@ -191,7 +194,6 @@ slots! {
         pub last_ground_pos_y: f64 = 0.0,
         pub last_blue_pad_tick: Option<f64> = None,
         pub robot_hold_timer: f64 = 0.0,
-        pub spider_orb_hold: bool = false,
         pub spider_teleport_pending: bool = false,
         pub spider_teleport_anim_timer: f64 = 0.0,
         pub spider_flash_timer: f64 = 0.0,
@@ -203,8 +205,20 @@ slots! {
         pub gd_last_slope_up: Option<bool> = None,
         pub gd_slope_rotation: f64 = f64::NAN,
         pub spider_teleport_noclip_death_pending: bool = false,
-        pub swing_flip_pending: bool = false,
-        pub spider_orb_input_locked: bool = false,
+        pub gravity_scale: f64 = 1.0,
+        pub force_ticks: Option<f64> = None,
+        pub force_acc_x: f64 = 0.0,
+        pub force_acc_y: f64 = 0.0,
+        pub safe_head_ticks: Option<f64> = None,
+        pub flip_head_ticks: Option<f64> = None,
+        pub j_block_ticks: Option<f64> = None,
+        pub gd_fall_start_y: Option<f64> = None,
+        pub gd_land_flag: bool = true,
+        pub gd_prev_fall_vel: Option<f64> = None,
+        pub gd_was_falling: bool = false,
+        pub gd_prev_held: Option<bool> = None,
+        pub gd_prev_ceiling: bool = false,
+        pub press_count: Option<f64> = None,
         pub ship_head_uid: Option<f64> = None,
         pub ship_head_flipped: bool = false,
         pub prev_ship_head_uid: Option<f64> = None,
@@ -282,15 +296,23 @@ pub struct Sim<'a> {
     pub stash: Vec<(usize, crate::pcol::Col)>,
     /// the level's coin bookkeeping (`tryCollectSecretCoin` ...); None in the harnesses, which answer through `Env`
     pub coins: Option<&'a mut crate::coins::CoinState>,
+    pub force_ids: Vec<f64>,
 }
 
 impl<'a> Sim<'a> {
-    pub fn new(p: &'a mut Player, g: &'a mut Globals, e: &'a mut Env) -> Sim<'a> { Sim { p, g, e, log: Vec::new(), vlog: Vec::new(), other: None, cands: Vec::new(), near_idx: Vec::new(), replace_idx: None, replace_pending: None, replace_cols: Default::default(), stash: Vec::new(), coins: None } }
+    pub fn new(p: &'a mut Player, g: &'a mut Globals, e: &'a mut Env) -> Sim<'a> { Sim { p, g, e, log: Vec::new(), vlog: Vec::new(), other: None, cands: Vec::new(), near_idx: Vec::new(), replace_idx: None, replace_pending: None, replace_cols: Default::default(), stash: Vec::new(), coins: None, force_ids: Vec::new() } }
 
     pub fn flip_mod(&self) -> f64 { if self.p.gravity_flipped { -1.0 } else { 1.0 } }
 
+    pub fn gravity_scale(&self) -> f64 { if self.p.gravity_scale > 0.0 { self.p.gravity_scale } else { 1.0 } }
+
+    pub fn speed_consts(&self) -> (f64, f64) {
+        let (grav, y_start) = grav_consts(self.g.player_speed);
+        (grav * self.gravity_scale(), y_start)
+    }
+
     pub fn player_is_falling(&self) -> bool {
-        let thr = 2.0 * grav_consts(self.g.player_speed).0;
+        let thr = 2.0 * self.speed_consts().0;
         if self.p.gravity_flipped { self.p.y_velocity > -thr } else { self.p.y_velocity < thr }
     }
 
@@ -303,7 +325,8 @@ impl<'a> Sim<'a> {
         let p = &mut *self.p;
         p.rotate_action_active = true;
         p.rotate_action_time = 0.0;
-        p.rotate_action_duration = if p.is_mini { 1.0 / 3.0 } else { 0.39 / D };
+        let scale = if p.gravity_scale > 0.0 { p.gravity_scale } else { 1.0 };
+        p.rotate_action_duration = (if p.is_mini { 1.0 / 3.0 } else { 0.39 / D }) / scale;
         p.rotate_action_start = p.rotation;
         p.rotate_action_total = std::f64::consts::PI * (if p.gravity_flipped { -1.0 } else { 1.0 }) * direction;
     }
@@ -410,38 +433,41 @@ impl<'a> Sim<'a> {
     }
 
     fn update_fly_jump(&mut self, dt: f64) {
-        let mini = if self.p.is_mini { 1.176470588 } else { 1.0 };
-        let mut a = 0.8;
-        if self.p.up_key_down { a = -1.0; }
-        let mut falling = if self.p.gravity_flipped { self.p.y_velocity > P } else { self.p.y_velocity < P };
-        if self.e.is_dual {
-            falling = if self.p.gravity_flipped { self.p.y_velocity > P } else { self.p.y_velocity < -P };
+        let f23 = if self.p.is_mini { 0.85 } else { 1.0 };
+        let flip = self.flip_mod();
+        let hold = self.p.up_key_down;
+        let up = self.p.y_velocity * flip;
+        if self.p.gd_accel && ((up >= 0.0 && up < 16.0 / f23) || (up <= 0.0 && up > -12.8 / f23)) {
+            self.p.gd_accel = false;
         }
-        if !self.p.up_key_down && !falling && !self.p.slope_bounce_active { a = 1.2; }
-        let mut b = 0.4;
-        if self.p.up_key_down && falling { b = 0.5; }
-        self.p.y_velocity -= P * dt * self.flip_mod() * a * b * mini;
-        if self.p.up_key_down { self.p.on_ground = false; }
-        if !self.p.was_boosted && !self.p.slope_bounce_active {
-            if self.p.gravity_flipped {
-                self.p.y_velocity = self.p.y_velocity.max(-16.0 * mini);
-                self.p.y_velocity = self.p.y_velocity.min(12.8 * mini);
-            } else {
-                self.p.y_velocity = self.p.y_velocity.max(-12.8 * mini);
-                self.p.y_velocity = self.p.y_velocity.min(16.0 * mini);
-            }
+        let below = up < 2.0 * self.speed_consts().0;
+        let (mult, k);
+        if !hold {
+            let mut m = if self.p.gd_accel { if up >= 0.0 { 0.8 } else { -1.0 } } else { 0.8 };
+            if !below { m = 1.2; }
+            mult = m;
+            k = 0.4;
+        } else {
+            mult = if self.p.gd_accel { if up >= 0.0 { 0.8 } else { -1.0 } } else { -1.0 };
+            k = if below { 0.5 } else { 0.4 };
         }
-        if self.p.slope_bounce_active && (falling || self.p.on_ground) { self.p.slope_bounce_active = false; }
+        let gs = self.gravity_scale();
+        self.p.y_velocity = gd_trunc(self.p.y_velocity - flip * k * mult * P * gs * dt / f23);
+        if hold { self.p.on_ground = false; }
+        if !self.p.gd_accel {
+            let up_now = (-12.8 / f23).max((16.0 / f23).min(self.p.y_velocity * flip));
+            self.p.y_velocity = gd_trunc(up_now * flip);
+        }
     }
 
     fn update_ball_jump(&mut self, dt: f64) {
-        let ball_grav = P * 0.6;
+        let ball_grav = P * 0.6 * self.gravity_scale();
         let prioritize_orb = self.should_prioritize_ground_orb_input();
         if !prioritize_orb && self.p.up_key_pressed && self.p.can_jump {
             let flip = self.flip_mod();
             self.p.up_key_pressed = false;
             self.p.queued_hold = false;
-            self.p.y_velocity = gd_trunc(flip * grav_consts(self.g.player_speed).1 * if self.p.is_mini { 0.8 } else { 1.0 });
+            self.p.y_velocity = gd_trunc(flip * self.speed_consts().1 * if self.p.is_mini { 0.8 } else { 1.0 });
             let flipped = !self.p.gravity_flipped;
             self.flip_gravity(flipped, 0.5);
             self.p.on_ground = false;
@@ -484,12 +510,13 @@ impl<'a> Sim<'a> {
 
     fn update_robot_jump(&mut self, dt: f64) {
         if !self.p.rotate_action_active { self.update_ground_rotation(dt); }
-        let (grav_c, y_start) = grav_consts(self.g.player_speed);
+        let (grav_c, y_start) = self.speed_consts();
         let flip = self.flip_mod();
         let grav = 0.9 * grav_c;
         if self.p.up_key_pressed && self.p.can_jump {
             self.p.up_key_pressed = false;
             self.p.is_jumping = true;
+            self.p.gd_land_flag = false;
             self.p.on_ground = false;
             self.p.can_jump = false;
             self.p.queued_hold = false;
@@ -521,37 +548,42 @@ impl<'a> Sim<'a> {
     }
 
     fn update_swing_jump(&mut self, dt: f64) {
-        if !(dt > 0.0) { return; }
-        let chi = if self.p.is_mini { 0.85 } else { 1.0 };
-        let incoming = self.p.y_velocity * self.flip_mod();
-        if incoming > -12.8 / chi && incoming < 16.0 / chi {
-            self.p.was_boosted = false;
-            self.p.gd_accel = false;
-        }
-        if self.p.swing_flip_pending {
-            self.p.swing_flip_pending = false;
-            let flipped = !self.p.gravity_flipped;
-            self.flip_gravity(flipped, 0.8);
-            self.p.on_ceiling = false;
-            self.p.is_jumping = false;
-        }
-        if self.p.up_key_pressed && !self.orb_touching(true) {
-            self.p.swing_flip_pending = true;
+        if self.p.up_key_pressed && self.p.up_key_down {
             self.p.up_key_pressed = false;
             self.p.queued_hold = false;
+            self.p.on_ground = false;
+            let flipped = !self.p.gravity_flipped;
+            self.flip_gravity(flipped, 0.8);
+            self.p.y_velocity = gd_trunc(self.p.y_velocity);
         }
-        let gravity = 1.916398048 * (if self.p.is_mini { 0.6 } else { 0.4 });
-        self.p.y_velocity = gd_trunc(self.p.y_velocity - gravity * dt * self.flip_mod());
-        if !self.p.was_boosted && !self.p.gd_accel && !self.p.slope_bounce_active {
-            self.p.y_velocity = (-16.0f64).max(16.0f64.min(self.p.y_velocity));
-        }
+        let flip = self.flip_mod();
+        let gs = self.gravity_scale();
+        let k = if self.p.is_mini { 0.6 } else { 0.4 };
+        self.p.y_velocity = gd_trunc(self.p.y_velocity - flip * k * P * gs * dt);
+        self.p.y_velocity = gd_trunc((-16.0f64).max(16.0f64.min(self.p.y_velocity)));
+        self.p.can_jump = false;
+        self.p.is_jumping = false;
     }
 
-    /// player.js `updateSwingRotation(dt)`
-    pub fn update_swing_rotation(&mut self, dt: f64) {
-        if !(dt > 0.0) { return; }
-        let aim = if self.p.on_ground || self.p.on_ceiling { 0.0 } else { m::atan2(-self.p.y_velocity, self.g.player_speed) };
-        self.p.rotation = slerp2d(self.p.rotation, aim, (1.0f64).min(0.15 * dt));
+    fn step_game_events(&mut self) {
+        let v = (if self.p.gravity_flipped { -1.0 } else { 1.0 }) * self.p.y_velocity / 2.0;
+        self.p.gd_prev_fall_vel = Some(v);
+        let falling = self.player_is_falling();
+        if self.p.on_ground { self.p.gd_fall_start_y = Some(self.p.y); }
+        else if falling && !self.p.gd_was_falling { self.p.gd_fall_start_y = Some(self.p.y); }
+        self.p.gd_was_falling = falling;
+        self.p.gd_prev_held = Some(self.p.up_key_down);
+        self.p.gd_prev_ceiling = self.p.on_ceiling;
+    }
+
+    pub fn force_mode_factor(&self) -> f64 {
+        let p = &*self.p;
+        if p.is_flying { if p.is_mini { 0.5875 } else { 0.47 } }
+        else if p.is_ufo { if p.is_mini { 0.725 } else { 0.58 } }
+        else if p.is_swing { if p.is_mini { 0.6154 } else { 0.4 } }
+        else if p.is_ball || p.is_spider { if p.is_mini { 0.725 } else { 0.6 } }
+        else if p.is_robot { if p.is_mini { 0.725 } else { 0.9 } }
+        else if p.is_mini { 0.725 } else { 1.0 }
     }
 
     fn update_ufo_jump(&mut self, dt: f64) {
@@ -582,10 +614,12 @@ impl<'a> Sim<'a> {
                 self.p.on_ground = false;
                 self.p.can_jump = false;
                 self.p.is_jumping = true;
+                self.p.gd_land_flag = false;
             }
         }
-        let ufo_mult = if self.p.y_velocity * flip >= 2.0 * grav_consts(self.g.player_speed).0 { 1.2 } else { 0.8 };
-        self.p.y_velocity = gd_trunc(self.p.y_velocity - flip * ufo_mult * P * dt * 0.5 / f23);
+        let ufo_mult = if self.p.y_velocity * flip >= 2.0 * self.speed_consts().0 { 1.2 } else { 0.8 };
+        let gs = self.gravity_scale();
+        self.p.y_velocity = gd_trunc(self.p.y_velocity - flip * ufo_mult * P * gs * dt * 0.5 / f23);
         if !self.p.gd_accel {
             let up_now = (-12.8 / f23).max((16.0 / f23).min(self.p.y_velocity * flip));
             self.p.y_velocity = gd_trunc(up_now * flip);
@@ -596,12 +630,18 @@ impl<'a> Sim<'a> {
 
     /// `updateJump(dt)`.
     pub fn update_jump(&mut self, dt: f64, cols: &[crate::pcol::Col]) {
-        if !self.p.up_key_down { self.p.spider_orb_input_locked = false; }
-        if self.p.spider_orb_input_locked {
-            self.p.up_key_pressed = false;
-            self.p.queued_hold = false;
-        }
+        self.step_game_events();
         if let Some(v) = self.p.pending_velocity.take() { self.p.y_velocity = v; }
+        if let Some(t) = self.p.force_ticks.filter(|t| *t > 0.0) {
+            self.p.force_ticks = Some(t - 1.0);
+            let fy = self.p.force_acc_y;
+            if fy != 0.0 {
+                self.p.y_velocity += 2.0 * 0.9 * self.force_mode_factor() * dt * fy;
+                if if self.p.gravity_flipped { fy < 0.0 } else { fy > 0.0 } { self.p.on_ground = false; }
+            }
+        }
+        self.p.force_acc_x = 0.0;
+        self.p.force_acc_y = 0.0;
         if self.p.is_dashing {
             if !self.p.up_key_down {
                 self.p.is_dashing = false;
@@ -623,9 +663,10 @@ impl<'a> Sim<'a> {
         if self.p.is_spider { return self.update_spider_jump(dt, cols); }
         if self.p.is_robot { return self.update_robot_jump(dt); }
         if self.p.is_swing { return self.update_swing_jump(dt); }
-        let (grav, y_start) = grav_consts(self.g.player_speed);
-        if self.p.up_key_down && self.p.can_jump && !self.p.spider_orb_input_locked {
+        let (grav, y_start) = self.speed_consts();
+        if self.p.up_key_down && self.p.can_jump {
             self.p.is_jumping = true;
+            self.p.gd_land_flag = false;
             self.p.on_ground = false;
             self.p.can_jump = false;
             self.p.up_key_pressed = false;

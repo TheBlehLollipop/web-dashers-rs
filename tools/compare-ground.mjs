@@ -10,7 +10,7 @@ const { ctx, w } = H;
 const src = fs.readFileSync(root + "ref/assets/scripts/core/level.js", "utf8");
 const m0 = src.indexOf("  updateGroundTiles(cameraY = 0) {"), m1 = src.indexOf("  _applyVisualProps(scene, sprite");
 vm.runInContext(`var S = 1, E = 0;
-this.GroundJS = class GroundJS {\n${src.slice(m0, m1)}\n};`, ctx);
+this.GroundJS = class GroundJS {\n${src.slice(m0, m1)}\n  getViewPad() { return 0; }\n};`, ctx);
 let seed = Number(process.argv[2] || 1);
 const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
 const SEQ = Number(process.argv[3] || 300), STEPS = Number(process.argv[4] || 200);
@@ -27,7 +27,7 @@ for (let s = 0; s < SEQ && bad < 5; s++) {
   const centre = sw / 2 - 150;
   const count = Math.ceil(sw / tw) + 2;
   ctx.screenWidth = sw;
-  g._tileW = tw; g._scene = { _cameraY: 0, textures: { exists: () => has2 } };
+  g._tileW = tw; g._scene = { _cameraY: 0, textures: { exists: () => has2, getFrame: () => null } };
   g._cameraXRef = { value: 0 };
   g._groundTiles = []; g._ceilingTiles = []; g._ground2Tiles = []; g._ceiling2Tiles = [];
   for (let i = 0; i < count; i++) {

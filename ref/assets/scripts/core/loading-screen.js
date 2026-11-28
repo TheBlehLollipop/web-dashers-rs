@@ -251,6 +251,7 @@ class BootScene extends Phaser.Scene {
     this.load.image("sliderBar2", "assets/ui-graphics/sprites/sliderBar2.png");
     this.load.image("GJ_MenuBeta", "assets/ui-graphics/sprites/GJ_MenuBeta.png");
     this.load.image("Phaserlogo", "assets/ui-graphics/sprites/Phaserlogo.png");
+    this.load.image("ishyLogo", "assets/ui-graphics/sprites/ishy_logo.png");
     this.load.image("gravityLine_001", "assets/ui-graphics/sprites/gravityLine_001.png");
     this.load.atlas("GJ_WebSheet", "assets/ui-graphics/sheets/GJ_WebSheet.png", "assets/ui-graphics/sheets/GJ_WebSheet.json");
     this.load.atlas("GJ_LaunchSheet", "assets/ui-graphics/sheets/GJ_LaunchSheet.png", "assets/ui-graphics/sheets/GJ_LaunchSheet.json");
@@ -258,7 +259,11 @@ class BootScene extends Phaser.Scene {
     this.load.text("goldFontFnt", "assets/fonts/goldFont.fnt");
     
     this.load.once("complete", () => {
-      window.BeastAnim.loadDescs(this);
+      window.GJBeast01_AnimDesc = this.cache.json.get("GJBeast01_AnimDesc") || null;
+      window.GJBeast02_AnimDesc = this.cache.json.get("GJBeast02_AnimDesc") || null;
+      window.GJBeast03_AnimDesc = this.cache.json.get("GJBeast03_AnimDesc") || null;
+      window.GJBeast04_AnimDesc = this.cache.json.get("GJBeast04_AnimDesc") || null;
+      window.GJBeast05_AnimDesc = this.cache.json.get("GJBeast05_AnimDesc") || null;
       const tex = this.textures.get("game_bg_01");
       const s = Math.max(W / tex.source[0].width, H / tex.source[0].height);
       const bg = this.add.image(cx, cy, "game_bg_01").setScale(s).setTint(0x0066ff);
@@ -273,7 +278,7 @@ class BootScene extends Phaser.Scene {
       const msg = LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)];
       this.add.bitmapText(cx, cy + 187, "goldFont", msg, 30).setOrigin(0.5);
       const robtopLogo = this.add.image(cx, cy - 120, "GJ_LaunchSheet", "RobTopLogoBig_001.png").setOrigin(0.5).setScale(0.8);
-      const gjLogo = this.add.image(cx, cy, "GJ_WebSheet", "GJ_logo_001.png").setOrigin(0.5).setScale(1.1);
+      const gjLogo = this.add.image(cx, cy, "ishyLogo").setOrigin(0.5).setScale(0.63);
       const Logo = this.add.image(W - 123, 610, "Phaserlogo").setScale(0.115).setInteractive();
       this.children.bringToTop(robtopLogo);
       this.children.bringToTop(gjLogo);
@@ -367,7 +372,7 @@ class BootScene extends Phaser.Scene {
         let paddedIndex = String(index);
         if (paddedIndex.length < 2) paddedIndex = "0" + paddedIndex;
         this.load.image("groundSquare_" + paddedIndex + "_001.png", "assets/game-sprites/game-ground/groundSquare_" + i + "_001.png");
-        this.load.image("groundSquare_" + paddedIndex + "_2_001.png", "assets/game-sprites/game-ground/groundSquare_" + i + "_2_001.png");
+        if (index >= 7) this.load.image("groundSquare_" + paddedIndex + "_2_001.png", "assets/game-sprites/game-ground/groundSquare_" + i + "_2_001.png");
       }
 
       for (let i = 1; i < 60; i++) {

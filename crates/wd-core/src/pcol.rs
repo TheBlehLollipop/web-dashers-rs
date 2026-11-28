@@ -10,9 +10,9 @@ pub const TYPES: &[&str] = &[
     "solid", "hazard", "dblock", "sblock", "slope", "jump_pad", "jump_ring", "coin", "speed",
     "portal_gravity_down", "portal_gravity_up", "portal_gravity_toggle", "portal_fly", "portal_cube", "portal_ball",
     "portal_wave", "portal_ufo", "portal_robot", "portal_spider", "portal_teleport", "portal_mirror_on", "portal_mirror_off",
-    "portal_mini_on", "portal_mini_off", "portal_dual_on", "portal_dual_off", "portal_swing", "deco", "hblock",
+    "portal_mini_on", "portal_mini_off", "portal_dual_on", "portal_dual_off", "portal_swing", "deco", "hblock", "fblock", "jblock", "forceblock",
 ];
-pub fn type_code(name: &str) -> f64 { TYPES.iter().position(|t| *t == name).unwrap_or(TYPES.len() - 1) as f64 }
+pub fn type_code(name: &str) -> f64 { TYPES.iter().position(|t| *t == name).unwrap_or(28) as f64 }
 const T_SOLID: f64 = 0.0;
 const T_HAZARD: f64 = 1.0;
 const T_DBLOCK: f64 = 2.0;
@@ -25,6 +25,9 @@ const T_SPEED: f64 = 8.0;
 const T_TELEPORT: f64 = 19.0;
 pub const T_DECO: f64 = 27.0;
 const T_HBLOCK: f64 = 28.0;
+const T_FBLOCK: f64 = 29.0;
+const T_JBLOCK: f64 = 30.0;
+const T_FORCEBLOCK: f64 = 31.0;
 const T_PORTAL_SWING: f64 = 26.0;
 fn is_portal(t: f64) -> bool { (9.0..=26.0).contains(&t) }
 
@@ -86,6 +89,15 @@ col_slots! {
     pub user_coin: bool = false,
     pub secret_completed: bool = false,
     pub user_completed: bool = false,
+    pub claim_touch: bool = false,
+    pub ee_toggle_press: Option<f64> = None,
+    pub force: f64 = 0.0,
+    pub force_min: f64 = 0.0,
+    pub force_max: f64 = 0.0,
+    pub force_radial: bool = false,
+    pub force_range: bool = false,
+    pub force_id: f64 = 0.0,
+    pub force_flip_y: bool = false,
 }
 
 impl Col {
@@ -130,12 +142,29 @@ impl<'a> Sim<'a> {
         p.is_dashing && !p.is_flying && !p.is_ball && !p.is_wave && !p.is_ufo && !p.is_spider && !p.is_robot && !p.is_swing
     }
 
+    fn ticking(t: Option<f64>) -> bool { matches!(t, Some(v) if v > 0.0) }
+
+    pub fn release_jump_hold(&mut self) {
+        self.p.up_key_down = false;
+        self.p.up_key_pressed = false;
+        self.p.queued_hold = false;
+        self.e.stop_jump_latch = true;
+    }
+
+    fn landing_game_event(&mut self) {
+        if !self.e.has_level_events || self.p.is_wave { return; }
+        if self.p.gd_fall_start_y.is_some() { self.p.gd_fall_start_y = None; }
+        self.p.gd_land_flag = true;
+    }
+
     pub fn hit_ground(&mut self, skip_burst: bool) {
+        if Self::ticking(self.p.j_block_ticks) && !self.p.on_ground { self.release_jump_hold(); }
         self.boost_trail(false);
         let dash_sliding = self.is_dash_spinning();
         let skip_burst = skip_burst || dash_sliding;
         self.p.slope_launch_spin = false;
         let burst = !skip_burst && !self.p.on_ground;
+        if !self.p.on_ground { self.landing_game_event(); }
         if !self.p.is_flying && !self.p.is_wave && !self.p.is_ufo && !self.p.is_swing { self.p.last_ground_y = self.p.y; }
         self.p.y_velocity = 0.0;
         self.p.on_ground = !dash_sliding;
@@ -246,6 +275,10 @@ impl<'a> Sim<'a> {
     pub fn check_collisions(&mut self, piece_offset: f64, cols: &mut Vec<Col>) {
         self.p.nc_total_frames += 1.0;
         self.p.died_this_frame = false;
+        for t in [&mut self.p.safe_head_ticks, &mut self.p.flip_head_ticks, &mut self.p.j_block_ticks] {
+            if let Some(v) = *t { if v > 0.0 { *t = Some(v - 1.0); } }
+        }
+        self.force_ids.clear();
         if self.p.spider_teleport_noclip_death_pending {
             self.p.died_this_frame = true;
             self.p.spider_teleport_noclip_death_pending = false;
@@ -372,7 +405,9 @@ impl<'a> Sim<'a> {
             }
             let make_guide = is_pc && !self.is_activated(&cols[i]);
             if make_guide { self.vlog.push(Self::fx_line(&cols[i])); }
+            if is_pc && !self.is_activated(&cols[i]) { self.p.gd_land_flag = false; }
             let portal_y = cols[i].portal_y.unwrap_or(cols[i].y);
+            let free = cols[i].free_mode;
             if ty == T_TELEPORT {
                 if !self.is_activated(&cols[i]) {
                     self.set_activated(&mut cols[i], true);
@@ -399,19 +434,19 @@ impl<'a> Sim<'a> {
                 if !self.is_activated(&cols[i]) {
                     self.set_activated(&mut cols[i], true);
                     self.exit_robot_mode(); self.exit_ball_mode(); self.exit_wave_mode(); self.exit_ship_mode(); self.exit_ufo_mode(); self.exit_swing_mode();
-                    self.enter_ship_mode(Some(portal_y), false);
+                    self.enter_ship_mode(Some(portal_y), false, free);
                 }
             } else if ty == 15.0 {
                 if !self.is_activated(&cols[i]) {
                     self.set_activated(&mut cols[i], true);
                     self.exit_robot_mode(); self.exit_ball_mode(); self.exit_ship_mode(); self.exit_wave_mode(); self.exit_ufo_mode(); self.exit_swing_mode();
-                    self.enter_wave_mode(Some(portal_y));
+                    self.enter_wave_mode(Some(portal_y), free);
                 }
             } else if ty == 16.0 {
                 if !self.is_activated(&cols[i]) {
                     self.set_activated(&mut cols[i], true);
                     self.exit_robot_mode(); self.exit_ball_mode(); self.exit_wave_mode(); self.exit_ship_mode(); self.exit_swing_mode();
-                    self.enter_ufo_mode(Some(portal_y), false);
+                    self.enter_ufo_mode(Some(portal_y), false, free);
                 }
             } else if ty == 13.0 {
                 if !self.is_activated(&cols[i]) {
@@ -422,7 +457,7 @@ impl<'a> Sim<'a> {
                 if !self.is_activated(&cols[i]) {
                     self.set_activated(&mut cols[i], true);
                     self.exit_robot_mode(); self.exit_ship_mode(); self.exit_wave_mode(); self.exit_ufo_mode(); self.exit_ball_mode(); self.exit_swing_mode();
-                    self.enter_ball_mode(Some(portal_y));
+                    self.enter_ball_mode(Some(portal_y), free);
                 }
             } else if ty == 17.0 {
                 if !self.is_activated(&cols[i]) {
@@ -438,12 +473,12 @@ impl<'a> Sim<'a> {
                     let vy = self.p.y_velocity * if self.p.is_swing && !self.p.slope_riding { 0.5 } else { 1.0 };
                     self.exit_ship_mode(); self.exit_robot_mode(); self.exit_ball_mode(); self.exit_wave_mode(); self.exit_ufo_mode(); self.exit_spider_mode(); self.exit_swing_mode();
                     if vy.is_finite() { self.p.y_velocity = vy; }
-                    self.enter_spider_mode(Some(portal_y), true);
+                    self.enter_spider_mode(Some(portal_y), true, free);
                 }
             } else if ty == T_PORTAL_SWING {
                 if !self.is_activated(&cols[i]) {
                     self.set_activated(&mut cols[i], true);
-                    self.enter_swing_mode(Some(portal_y), false);
+                    self.enter_swing_mode(Some(portal_y), false, free);
                 }
             } else if ty == 9.0 || ty == 10.0 || ty == 11.0 {
                 if !self.is_activated(&cols[i]) {
@@ -481,6 +516,7 @@ impl<'a> Sim<'a> {
                 if !self.is_activated(&cols[i]) {
                     self.set_activated(&mut cols[i], true);
                     self.vlog.push(Self::fx_line(&cols[i]));
+                    self.p.gd_land_flag = false;
                     let pad_id = cols[i].id;
                     if pad_id == Some(67.0) {
                         let tick = self.e.physics_tick;
@@ -491,9 +527,18 @@ impl<'a> Sim<'a> {
                     }
                     let fm = self.flip_mod();
                     if pad_id == Some(3005.0) {
-                        let obj = cols[i].clone();
-                        grounded = self.activate_spider_transport(&obj, piece_width, cols);
-                        if self.p.is_dead { return; }
+                        let ps = if self.p.is_mini { 18.0 } else { 30.0 };
+                        if !self.spider_teleport(ps, cols) { continue; }
+                        self.sync_other_dual_gravity();
+                        self.vlog.push(format!("grav:{}", self.p.gravity_flipped as u8));
+                        if self.p.is_ball {
+                            let dir = if self.p.gravity_flipped { -1.0 } else { 1.0 };
+                            self.p.ball_normal_rotate = if self.p.mirrored { -dir } else { dir };
+                            self.p.ball_should_rotate = true;
+                            self.p.ball_rotate_opposite = self.p.gravity_flipped;
+                            self.p.ball_hit_pad = true;
+                        }
+                        self.p.is_jumping = false;
                         boosted_this_step = true;
                         teleported_this_step = true;
                         best_slope_candidate = None;
@@ -520,6 +565,7 @@ impl<'a> Sim<'a> {
                         self.p.gd_accel = pad_id == Some(1332.0) || self.p.is_swing;
                         if self.p.is_robot && self.g.robot_pad_touch { self.p.robot_touched_pad = true; }
                         self.p.is_jumping = true;
+                        self.p.gd_land_flag = false;
                         self.p.on_ground = false;
                         self.p.can_jump = false;
                         self.p.y_velocity = crate::physics::gd_trunc(fm * pad_vel);
@@ -544,11 +590,23 @@ impl<'a> Sim<'a> {
                 let orb_id = cols[i].id;
                 let is_dash = orb_id == Some(1704.0) || orb_id == Some(1751.0);
                 let just_pressed = self.p.up_key_down && !self.p.was_up_key_down;
-                let needs_click = !self.p.spider_orb_input_locked && !orb_input_consumed_this_step && !self.p.orb_activation_consumed_for_press
-                    && (if self.p.is_flying || self.p.is_ufo || self.p.is_swing { just_pressed } else { just_pressed || (self.p.queued_hold && self.p.up_key_down) });
-                self.p.touching_ring = true;
+                let needs_click = !orb_input_consumed_this_step && !self.p.orb_activation_consumed_for_press
+                    && (if self.p.is_flying || self.p.is_ufo || self.p.is_wave || self.p.is_swing { just_pressed } else { just_pressed || (self.p.queued_hold && self.p.up_key_down) });
+                if orb_id != Some(3643.0) || cols[i].claim_touch { self.p.touching_ring = true; }
+                if orb_id == Some(3643.0) {
+                    if needs_click && (cols[i].multi_activate || !self.is_activated(&cols[i])) && cols[i].ee_toggle_press != self.p.press_count {
+                        cols[i].ee_toggle_press = self.p.press_count;
+                        self.set_activated(&mut cols[i], true);
+                        if cols[i].claim_touch {
+                            orb_input_consumed_this_step = true;
+                            self.consume_orb_activation_input();
+                        }
+                    }
+                    continue;
+                }
                 if (cols[i].multi_activate || !self.is_activated(&cols[i])) && needs_click {
                     self.vlog.push(Self::fx_line(&cols[i]));
+                    self.p.gd_land_flag = false;
                     if is_dash {
                         let hold = self.dash_hold_ticks(&cols[i]) + 1.0;
                         self.set_dash_hold_ticks(&mut cols[i], hold);
@@ -600,13 +658,12 @@ impl<'a> Sim<'a> {
                             self.sync_other_dual_gravity();
                             boosted_this_step = true;
                             self.boost_trail(true);
-                        } else if orb_id == Some(3004.0) {
-                            let obj = cols[i].clone();
-                            grounded = self.activate_spider_transport(&obj, piece_width, cols);
-                            self.p.spider_orb_input_locked = true;
-                            self.p.spider_orb_hold = false;
-                            self.consume_orb_activation_input();
-                            if self.p.is_dead { return; }
+                        } else if orb_id == Some(444.0) || orb_id == Some(3004.0) {
+                            let ps = if self.p.is_mini { 18.0 } else { 30.0 };
+                            if !self.spider_teleport(ps, cols) { continue; }
+                            self.vlog.push(format!("grav:{}", self.p.gravity_flipped as u8));
+                            self.sync_other_dual_gravity();
+                            self.run_rotate_action(1.0);
                             boosted_this_step = true;
                             teleported_this_step = true;
                             best_slope_candidate = None;
@@ -628,7 +685,6 @@ impl<'a> Sim<'a> {
                             if orb_id == Some(1330.0) {
                                 orb_vel = if o_ship { -28.0 } else if o_ufo { -22.4 } else if o_spider { -33.0 } else { -30.0 };
                                 self.p.gd_accel = true;
-                                if o_spider && self.p.up_key_down { self.p.spider_orb_hold = true; }
                             } else {
                                 let base;
                                 if orb_id == Some(141.0) {
@@ -658,8 +714,9 @@ impl<'a> Sim<'a> {
                                 orb_vel = y_s * base * o_mini;
                                 if o_ball || o_spider { orb_vel *= 0.7; }
                             }
-                            if self.p.is_swing { self.p.gd_accel = true; self.p.swing_flip_pending = false; }
+                            if self.p.is_swing { self.p.gd_accel = true; }
                             self.p.is_jumping = true;
+                            self.p.gd_land_flag = false;
                             self.p.on_ground = false;
                             self.p.can_jump = false;
                             if flip_before {
@@ -707,6 +764,7 @@ impl<'a> Sim<'a> {
                 t if t == T_SLOPE => {
                     let res = self.handle_slope_collision(&cols[i], piece_width, players_y, players_last_y, player_size, wave_hit, gamemode_addition, cols);
                     if res.died {
+                        if Self::ticking(self.p.safe_head_ticks) { continue; }
                         if self.g.no_clip { self.p.died_this_frame = true; continue; }
                         self.kill_player();
                         return;
@@ -763,7 +821,7 @@ impl<'a> Sim<'a> {
                     let a869 = players_last_y - solid_size + gamemode_addition;
                     let a3e7 = players_y + solid_size - gamemode_addition;
                     let a135 = players_last_y + solid_size - gamemode_addition;
-                    let tight = if self.p.is_wave { wave_hit / 3.0 } else { 9.0 };
+                    let tight = if self.p.is_wave { wave_hit / 3.0 } else { player_size * 0.3 };
                     let colliding;
                     if let Some(r) = circle {
                         let (dx, dy) = (piece_width - x, players_y - y);
@@ -798,6 +856,28 @@ impl<'a> Sim<'a> {
                     let wave_land_top = self.p.is_wave && (self.p.y_velocity >= 0.0 || self.p.on_ground) && a3e7 > top && a3e7 - top <= wave_tol;
                     let land_top = normal_land_top || coyote_top || skip_top || wave_land_top;
                     let safe_on_surface = if self.p.is_wave { land_bot || land_top } else { standing };
+                    if (Self::ticking(self.p.safe_head_ticks) || Self::ticking(self.p.flip_head_ticks)) && !self.p.is_flying && !self.p.is_wave && !self.p.is_ufo && !safe_on_surface
+                        && piece_width + solid_size - 5.0 > left && piece_width - solid_size + 5.0 < right {
+                        let mut hit_head = false;
+                        if !self.p.gravity_flipped && land_top && self.p.y_velocity > 0.0 {
+                            self.p.y = top - solid_size;
+                            self.p.y_velocity = 0.0;
+                            hit_head = true;
+                        } else if self.p.gravity_flipped && land_bot && self.p.y_velocity < 0.0 {
+                            self.p.y = bottom + solid_size;
+                            self.p.y_velocity = 0.0;
+                            hit_head = true;
+                        }
+                        if hit_head {
+                            if Self::ticking(self.p.flip_head_ticks) {
+                                let flipped = !self.p.gravity_flipped;
+                                self.flip_gravity(flipped, 1.0);
+                                self.p.y_velocity = if self.p.gravity_flipped { 4.0 } else { -4.0 };
+                                if Self::ticking(self.p.j_block_ticks) { self.release_jump_hold(); }
+                            }
+                            continue;
+                        }
+                    }
                     let head_y = if self.p.gravity_flipped { bottom } else { top };
                     let head_crossing = if self.p.gravity_flipped {
                         self.p.y_velocity < 0.0 && players_last_y - solid_size >= bottom - 2.0 && players_y - solid_size <= bottom
@@ -875,6 +955,10 @@ impl<'a> Sim<'a> {
                         }
                     }
                 }
+                t if t == T_HBLOCK => { self.p.safe_head_ticks = Some(2.0); }
+                t if t == T_FBLOCK => { self.p.flip_head_ticks = Some(2.0); }
+                t if t == T_JBLOCK => { self.p.j_block_ticks = Some(2.0); }
+                t if t == T_FORCEBLOCK => { let c = cols[i].clone(); self.add_block_force(&c, piece_width, players_y); }
                 t if t == T_SBLOCK => {
                     if self.p.is_dashing { self.p.is_dashing = false; self.p.dash_y_velocity = 0.0; }
                 }
@@ -983,6 +1067,9 @@ impl<'a> Sim<'a> {
                     }
                 }
             }
+        }
+        if (if self.e.in_sideways_step { self.e.player_world_x } else { self.p.y }) > 1890.0 * 4.0 {
+            if self.g.no_clip { self.p.died_this_frame = true; } else { self.kill_player(); return; }
         }
         if self.p.ignore_teleport_until_clear && !touching_teleport_during_ignore { self.p.ignore_teleport_until_clear = false; }
         if snapped_slope_this_frame {
@@ -1122,6 +1209,7 @@ impl Col {
             hypo_ax: c.hypo_a.0, hypo_ay: c.hypo_a.1, hypo_bx: c.hypo_b.0, hypo_by: c.hypo_b.1, right_ax: c.right_a.0, right_ay: c.right_a.1,
             slope_solid_below: c.slope_solid_below, slope_type: f(c.slope_type), gd_solid_above: c.gd_solid_above, gd_wall_on_left: c.gd_wall_on_left,
             secret_coin: c.coin_id == Some(142), user_coin: c.coin_id == Some(1329), secret_completed: false, user_completed: false,
+            claim_touch: c.claim_touch, ee_toggle_press: None, force: c.force, force_min: c.force_min, force_max: c.force_max, force_radial: c.force_radial, force_range: c.force_range, force_id: c.force_id as f64, force_flip_y: c.force_flip_y,
         }
     }
 }
@@ -1201,46 +1289,38 @@ impl<'a> Sim<'a> {
         false
     }
 
-    /// `_activateSpiderTransport`: the spider pad / spider orb teleport (up or down, by the object's rotation and flip)
-    pub(crate) fn activate_spider_transport(&mut self, obj: &Col, world_x: f64, cols: &[Col]) -> bool {
-        let rotation = or_zero(obj.rotation_degrees) * std::f64::consts::PI / 180.0;
-        let going_up = m::cos(rotation) * if obj.flip_y { -1.0 } else { 1.0 } >= 0.0;
-        let player_size = if self.p.is_wave { if self.p.is_mini { 6.0 } else { 9.0 } } else if self.p.is_mini { 18.0 } else { 30.0 };
-        let old_y = self.p.y;
-        let surface = self.find_spider_teleport_surface(going_up, world_x, player_size, cols).filter(|v| v.is_finite());
-        let landed = surface.is_some();
-        if !landed && going_up {
-            return self.theres_nothing_there_teleport(world_x, player_size, false, cols);
+    /// `_addBlockForce`
+    pub(crate) fn add_block_force(&mut self, obj: &Col, px: f64, py: f64) {
+        if obj.force_id >= 1.0 {
+            if self.force_ids.contains(&obj.force_id) { return; }
+            self.force_ids.push(obj.force_id);
         }
-        let target_y = match surface { Some(sf) => sf + if going_up { -player_size } else { player_size }, None => old_y };
-        let hazard = if landed { self.find_spider_teleport_hazard(going_up, world_x, player_size, target_y, cols) } else { None };
-        if hazard.is_some() && !self.g.no_clip {
-            self.kill_player();
-            return false;
+        let radius = match obj.hitbox_radius { Some(r) if r > 0.0 => r, _ => obj.w.max(obj.h) / 2.0 };
+        let mut force = obj.force;
+        let ang;
+        if obj.force_radial {
+            ang = m::atan2(obj.y - py, obj.x - px) + if obj.force_flip_y { 0.0 } else { std::f64::consts::PI };
+        } else {
+            ang = (90.0 - or_zero(obj.rotation_degrees) + if obj.force_flip_y { 180.0 } else { 0.0 }) * std::f64::consts::PI / 180.0;
         }
-        if hazard.is_some() && self.g.no_clip { self.p.died_this_frame = true; }
-        let gravity_changed = self.p.gravity_flipped != going_up;
-        self.flip_gravity(going_up, 1.0);
-        if gravity_changed {
-            self.sync_other_dual_gravity();
-            self.vlog.push(format!("grav:{}", going_up as u8));
+        if obj.force_range {
+            let t;
+            if obj.force_radial {
+                let dist = m::hypot2(obj.x - px, obj.y - py);
+                t = if dist < radius { 1.0 - dist / radius } else { 0.0 };
+            } else {
+                t = ((radius + (obj.x - px) * m::cos(ang) + (obj.y - py) * m::sin(ang)) / radius) * 0.5;
+            }
+            let t = (0.0f64).max((1.0f64).min(t));
+            force = obj.force_min + t * (obj.force_max - obj.force_min);
         }
-        self.p.y = target_y;
-        self.p.last_y = target_y;
-        self.p.y_velocity = 0.0;
-        self.p.pending_velocity = None;
-        self.p.is_dashing = false;
-        self.p.dash_y_velocity = 0.0;
-        self.p.gd_accel = false;
-        self.p.on_ground = landed;
-        self.p.on_ceiling = landed && going_up;
-        self.p.can_jump = landed;
-        self.p.is_jumping = false;
-        self.p.collide_top = 0.0;
-        self.p.collide_bottom = 0.0;
-        self.p.skip_slope_exit = true;
-        self.p.last_collision_world_y = Some(target_y);
-        self.vlog.push(format!("tp:{},{}", old_y, target_y));
-        landed
+        self.p.force_acc_x += force * m::cos(ang);
+        self.p.force_acc_y += force * m::sin(ang);
+        let len = m::hypot2(self.p.force_acc_x, self.p.force_acc_y);
+        if len > 10000.0 {
+            self.p.force_acc_x *= 10000.0 / len;
+            self.p.force_acc_y *= 10000.0 / len;
+        }
+        self.p.force_ticks = Some(2.0);
     }
 }

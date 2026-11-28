@@ -180,6 +180,8 @@ pub struct Builder<'a> {
     pub atlases: &'a Atlases,
     pub sprites: Vec<Sprite>,
     pub spawn_order: f64,
+    enter_channel: f64,
+    parent_groups: Vec<f64>,
     pub secret_slots: i64,
     pub user_slots: i64,
     /// saved coin progress (linked object ids), for the collected look of coins
@@ -215,7 +217,7 @@ fn re_persp_outline(f: &str) -> bool { f.starts_with("persp_outline_") }
 
 impl<'a> Builder<'a> {
     pub fn new(atlases: &'a Atlases, rng: &'a mut dyn FnMut() -> f64) -> Builder<'a> {
-        Builder { atlases, sprites: Vec::new(), spawn_order: 0.0, secret_slots: 0, user_slots: 0, secret_done: Vec::new(), user_done: Vec::new(), beasts: Vec::new(), glow_keys: HashSet::new(), next_object_id: 0, legacy_color_level: false, is_editor: false, ldm: false, group_sprites: BTreeMap::new(), emitters: Vec::new(), pad_emitters: false, lists: SpriteLists::default(), prev_pad_emitter: None, color_channel_sprites: BTreeMap::new(), channel_blending: [(1007i64, true)].into_iter().collect(), persp_cache: HashMap::new(), rng }
+        Builder { atlases, sprites: Vec::new(), spawn_order: 0.0, enter_channel: 0.0, parent_groups: Vec::new(), secret_slots: 0, user_slots: 0, secret_done: Vec::new(), user_done: Vec::new(), beasts: Vec::new(), glow_keys: HashSet::new(), next_object_id: 0, legacy_color_level: false, is_editor: false, ldm: false, group_sprites: BTreeMap::new(), emitters: Vec::new(), pad_emitters: false, lists: SpriteLists::default(), prev_pad_emitter: None, color_channel_sprites: BTreeMap::new(), channel_blending: [(1007i64, true)].into_iter().collect(), persp_cache: HashMap::new(), rng }
     }
 
     /// The particle emitter of the pads that have one (`_spawnObject`'s pad branch): it only matters to the sprite world as a
@@ -423,6 +425,8 @@ impl<'a> Builder<'a> {
 
     fn add_to_section(&mut self, si: usize) {
         let s = &mut self.sprites[si];
+        s.set_num("_eeEnterChannel", self.enter_channel);
+        if !self.parent_groups.is_empty() { s.props.insert("_eeParentGroups", Val::Arr(self.parent_groups.clone())); }
         let wx = s.num("_eeWorldX").unwrap_or(f64::NAN);
         let idx = 0f64.max((or0(wx) / 400.0).floor());
         s.set_num("_eeSectionIndex", idx);
@@ -453,6 +457,8 @@ impl<'a> Builder<'a> {
     /// Spawns the sprites of one (non-trigger) level object.
     pub fn spawn(&mut self, o: &LevelObject) -> std::ops::Range<usize> {
         let start = self.sprites.len();
+        self.enter_channel = o.raw.get("343").and_then(|v| crate::js::parse_int(v)).unwrap_or(0) as f64;
+        self.parent_groups = o.raw.get("274").map(|v| v.split('.').map(crate::js::to_number).filter(|n| *n > 0.0).collect()).unwrap_or_default();
         let id = o.id.unwrap_or(0);
         let def = match def_of(id) { Some(d) => d, None => { self.next_object_id += 1; return start..start; } };
         let linked = self.next_object_id;
@@ -754,6 +760,7 @@ impl Reg {
             let spr_hsv = if self.has_detail && ch == self.col2 && self.col2 != col1 { self.hsv2 } else if ch == col1 { self.hsv1 } else { None };
             if ch == 1012.0 && col1 > 0.0 && col1 != 1012.0 { s.set_flag("_eeLighter", true); ch = col1; }
             s.set_num("_eeColorChannel", ch);
+            s.set_flag("_eeIsDetail", self.has_detail && ch == self.col2 && self.col2 != col1);
             if let Some(h) = spr_hsv { s.props.insert("_eeHsv", Val::Arr(vec![h.h, h.s, h.v, h.s_add as u8 as f64, h.v_add as u8 as f64])); }
             if s.num("_eeBaseBlend").is_none() { let b = s.blend as f64; s.set_num("_eeBaseBlend", b); }
             if s.num("_eeLayerBase").is_none() { s.set_num("_eeLayerBase", self.depth_base); }
@@ -848,8 +855,8 @@ impl<'a> Builder<'a> {
             let mut cdy = cd.get_num("dy").unwrap_or(0.0) * psy;
             let auto_dx = persp.as_ref().and_then(|p| p.get(&ci)).copied();
             if cd.get("localDx").is_some() || cd.get("localDy").is_some() || auto_dx.is_some() {
-                let mut ldx = auto_dx.unwrap_or_else(|| or0(cd.get_num("localDx").unwrap_or(0.0))) * psx;
-                let mut ldy = or0(cd.get_num("localDy").unwrap_or(0.0)) * psy;
+                let mut ldx = auto_dx.unwrap_or_else(|| or0(cd.get_num("localDx").unwrap_or(0.0)));
+                let mut ldy = or0(cd.get_num("localDy").unwrap_or(0.0));
                 if o.flip_x { ldx = -ldx; }
                 if o.flip_y { ldy = -ldy; }
                 let (cs_x, cs_y) = gd_object_scale(o);
@@ -873,11 +880,18 @@ impl<'a> Builder<'a> {
             }
             // `childVisualDef`: the child's own flags, with `can_color` falling back to the parent's for black children
             let black_child = cd.get_bool("black") == Some(true) || cd.get_num("tint") == Some(0.0);
-            let child_can_color: Option<bool> = if black_child { cd.get_bool("can_color").or(def.get_bool("can_color")) } else { cd.get_bool("can_color") };
-            self.apply_visual_props_child(ci_s, &cframe, o, crot, cd, child_can_color);
+            let child_can_color: Option<bool> = if black_child { cd.get_bool("can_color").or(def.get_bool("can_color")) } else { cd.get_bool("can_color").or(if def.get_str("frame") == Some("none") && cd.get_bool("audioScale") == Some(true) { def.get_bool("can_color") } else { None }) };
+            let child_rot_def = or0(cd.get_num("rot").unwrap_or(0.0));
+            let quarter = m_round(child_rot_def / 90.0);
+            let swapped;
+            let o_child = if quarter % 2.0 != 0.0 && (child_rot_def - quarter * 90.0).abs() < 0.01 && gd_object_warp(o) == 0.0 {
+                let (psx2, psy2) = gd_object_scale(o);
+                if psx2 != psy2 { let mut c = o.clone(); c.scale_x = psy2; c.scale_y = psx2; swapped = c; &swapped } else { o }
+            } else { o };
+            self.apply_visual_props_child(ci_s, &cframe, o_child, crot, cd, child_can_color);
             self.sprites[ci_s].set_flag("_cantColor", cd.get_bool("Cant_Color") == Some(true));
             self.register_animated(ci_s, cd);
-            if cd.get_bool("can_color") == Some(true) { self.sprites[ci_s].set_flag("_canColor", true); }
+            if child_can_color == Some(true) { self.sprites[ci_s].set_flag("_canColor", true); }
             let show_guide = if cd.get_bool("portalGuide") == Some(true) { !self.is_editor } else { true };
             let show_guide2 = if cd.get_bool("orbGuide") == Some(true) { !self.is_editor } else { true };
             self.sprites[ci_s].visible = show_guide && show_guide2;
@@ -888,7 +902,7 @@ impl<'a> Builder<'a> {
                 s.scale_x = 0.1; s.scale_y = 0.1;
                 s.set_alpha(0.9);
                 s.set_flag("_eeAudioScale", true);
-                if cd.get_bool("can_color") == Some(true) { s.set_flag("_eeAudioTintable", true); }
+                if child_can_color == Some(true) { s.set_flag("_eeAudioTintable", true); }
                 self.lists.audio_scale.push(ci_s);
             }
             if cd.get_bool("audioPulse") == Some(true) { self.lists.audio_pulse.push(ci_s); }

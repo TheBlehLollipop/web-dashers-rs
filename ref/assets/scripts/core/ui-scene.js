@@ -3,7 +3,9 @@ class UIScene extends Phaser.Scene {
     super(config);
   }
   _createMenuUI() {
-    this._logo = this.add.image(0, 100, "GJ_WebSheet", "GJ_logo_001.png").setScrollFactor(0).setDepth(30).setScale(1.2);
+    this._logo = this.textures.exists("ishyLogo")
+      ? this.add.image(0, 100, "ishyLogo").setScrollFactor(0).setDepth(30).setScale(0.76)
+      : this.add.image(0, 100, "GJ_WebSheet", "GJ_logo_001.png").setScrollFactor(0).setDepth(30).setScale(1.2);
     this._robLogo = this.add.image(110, 595, "GJ_WebSheet", "RobTopLogoBig_001.png").setScrollFactor(0).setDepth(30).setScale(0.525).setInteractive();
     this._makeBouncyButton(this._robLogo, 0.525, () => {
       window.open("https://geometrydash.com", "_blank");
@@ -4098,7 +4100,7 @@ this._menuFsBtn = this.add.image(33, 33, "GJ_WebSheet", _0x28fa5b ? "toggleFulls
     const arrowL = this.add.image(55, cy - 25, "GJ_GameSheet03", "navArrowBtn_001.png").setScrollFactor(0).setDepth(154).setScale(1.1).setFlipX(true).setInteractive();
     const arrowR = this.add.image(sw - 55, cy - 25, "GJ_GameSheet03", "navArrowBtn_001.png").setScrollFactor(0).setDepth(154).setScale(1.1).setFlipX(false).setInteractive();
     const allLevels = window.allLevels || [];
-    const _hiddenLevels = ["level_22", "level_67"];
+    const _hiddenLevels = ["level_67"];
     const visibleLevels = allLevels.filter(level => !(level && _hiddenLevels.includes(level[2])));
     const pageCount = visibleLevels.length + 1;
     let currentPageIndex = visibleLevels.findIndex(l => l[2] === window.currentlevel[2]);
@@ -6491,6 +6493,7 @@ this._menuFsBtn = this.add.image(33, 33, "GJ_WebSheet", _0x28fa5b ? "toggleFulls
     const titleText = this.add.bitmapText(xPos, _nt + 42, "goldFont", "News", 52).setOrigin(0.5, 0.5);
     this._newsPopup.add(titleText);
     this._newsPages = [
+      { date: "November 19th, 2026", title: "ISHY DASHERS UPDATE 2", notes: ["Ishy Dashers is now built on Web Dashers v2.0, so you get 2.2 icons, the Vault, daily and weekly levels, custom keybinds, level stats and the startpos revamp too", "Lots of 2.2 triggers now work:", "Shader triggers: shockwave, shockline, glitch, chromatic, pixelate, lens circle, radial blur, motion blur, bulge, pinch, gray scale, sepia, invert, hue, edit color and split screen", "Camera triggers: offset, zoom, rotate, static, edge and camera mode, plus free mode camera from portals", "Rotate Gameplay: play levels sideways and upside down", "Area triggers (move, rotate, scale, fade, tint) and custom enter effects", "Advanced Follow and Keyframe animations", "Random, Sequence, Item Edit/Compare, Timers, Time Warp, Scale, Gravity, Teleport, Reverse, Player Control, Options, Song and SFX triggers", "Change BG/Ground, BG and MG speed, Link Visible and spawn remapping", "Levels look much closer to real GD: colors, glow, see-through objects and layering are fixed", "Color triggers work properly now, including copied colors, pulses and fades", "Slopes feel more like GD: no more getting pulled onto them, and the cube spins the right way", "Widescreen support: the game fills your screen, from 16:10 up to ultrawide", "No more freeze after dying, so the music stays in sync when you respawn", "Blue pads and robot jumps work like in GD", "Arrows, orbs and rod balls pulse to the music more smoothly", "Beasts are animated and colored correctly", "Smoother on big levels (turn on LDM if your device struggles)", "Plus a bunch of smaller bug fixes"] },
       {
         date: "November 27th, 2026",
         title: "QOL Update! - V2.1",

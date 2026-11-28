@@ -34,6 +34,9 @@ pub struct Game {
     pub end_portal_game_y: f64,
     pub camera_x: f64,
     pub camera_y: f64,
+    pub follow_camera_y: Option<f64>,
+    pub rotate_gameplay_enabled: bool,
+    pub sideways_proxies: std::collections::BTreeMap<usize, Col>,
     pub level_won: bool,
     pub end_camera_override: bool,
     pub end_cam: Option<EndCam>,
@@ -112,6 +115,7 @@ impl Game {
         self.e.fly_floor_y = None;
         self.e.fly_ceiling_y = None;
         self.e.fly_camera_target = None; // `resetGroundState`: the camera stops following the fly area
+        self.reset_ground_camera();
         self.e.portal_free_mode = false;
         self.e.floor_y = 0.0;
         self.e.ceiling_y = None;
@@ -121,13 +125,13 @@ impl Game {
         self.space_was_down = false;
         let mut sim = Sim::new(&mut self.p, &mut self.g, &mut self.e);
         match game_mode {
-            1 => sim.enter_ship_mode(None, false),
-            2 => sim.enter_ball_mode(Some(30.0)),
-            3 => sim.enter_ufo_mode(None, false),
-            4 => sim.enter_wave_mode(None),
+            1 => sim.enter_ship_mode(None, false, false),
+            2 => sim.enter_ball_mode(Some(30.0), false),
+            3 => sim.enter_ufo_mode(None, false, false),
+            4 => sim.enter_wave_mode(None, false),
             5 => sim.enter_robot_mode(false),
-            6 => sim.enter_spider_mode(None, false),
-            7 => sim.enter_swing_mode(None, false),
+            6 => sim.enter_spider_mode(None, false, false),
+            7 => sim.enter_swing_mode(None, false, false),
             _ => {}
         }
         self.log.extend(sim.log);
@@ -175,7 +179,6 @@ impl Game {
             if t.touch || t.b.spawn_triggered { continue; }
             if t.x <= target_x { self.execute_toggle_pub(ti); } else { break; }
         }
-        self.check_time_warp(target_x, None, None);
         self.check_animation(target_x);
         self.check_pickup(target_x);
         self.check_count(target_x);
@@ -201,7 +204,7 @@ impl Game {
         self.reset_color();
         self.reset_rotate(); self.reset_alpha(); self.reset_shake(); self.reset_player_vis(); self.reset_animation(); self.reset_enter_effect(); self.reset_pulse(); self.reset_spawn(); self.reset_move(); self.reset_stop(); self.reset_follow_y(); self.reset_follow();
         self.reset_channel_blending();
-        self.reset_toggle(); self.reset_on_death(); self.reset_touch(); self.reset_pickup(); self.reset_count(); self.reset_collision(); self.reset_instant_count(); self.reset_time_warp();
+        self.reset_toggle(); self.reset_on_death(); self.reset_touch(); self.reset_pickup(); self.reset_count(); self.reset_collision(); self.reset_instant_count(); self.reset_generic(false);
         self.check_toggle(0.0); self.check_pickup(0.0); self.check_count(0.0); self.check_collision_triggers(0.0); self.check_instant_count(0.0);
         self.check_on_death(0.0); self.check_touch_triggers(0.0);
         self.cm.reset();
@@ -262,7 +265,7 @@ impl Game {
         self.reset_color();
         self.reset_rotate(); self.reset_alpha(); self.reset_shake(); self.reset_player_vis(); self.reset_animation(); self.reset_enter_effect(); self.reset_pulse(); self.reset_spawn(); self.reset_move(); self.reset_stop(); self.reset_follow_y(); self.reset_follow();
         self.reset_channel_blending();
-        self.reset_toggle(); self.reset_on_death(); self.reset_touch(); self.reset_pickup(); self.reset_count(); self.reset_collision(); self.reset_instant_count(); self.reset_time_warp();
+        self.reset_toggle(); self.reset_on_death(); self.reset_touch(); self.reset_pickup(); self.reset_count(); self.reset_collision(); self.reset_instant_count(); self.reset_generic(false);
         self.check_toggle(0.0); self.check_pickup(0.0); self.check_count(0.0); self.check_collision_triggers(0.0); self.check_instant_count(0.0);
         self.check_on_death(0.0); self.check_touch_triggers(0.0);
         self.cm.reset();
@@ -295,7 +298,7 @@ impl Game {
             self.fast_forward_triggers(x);
             self.p.last_collision_world_x = if self.e.player_world_x.is_finite() { Some(self.e.player_world_x) } else { None };
             self.p.last_collision_world_y = Some(y);
-            self.camera_x = self.e.player_world_x - self.g.center_x;
+            self.camera_x = self.e.player_world_x - self.g.center_x + crate::triggers::or0(self.trig.gen.camera_offset.0) + crate::triggers::or0(self.trig.gen.gameplay_offset.0);
         } else {
             if self.start.speed_key >= 0 { if let Some(v) = speeds.get(self.start.speed_key as usize) { self.g.player_speed = *v; } }
             self.enter_start_mode(self.start.game_mode, Some(30.0));
@@ -309,7 +312,7 @@ impl Game {
 
     /// The level-layer part of an attempt start (`resetGroundState`).
     fn begin_ground(&mut self) {
-        self.e.fly_ground_active = false; self.e.fly_visual_only = false; self.e.fly_floor_y = None; self.e.fly_ceiling_y = None; self.e.fly_camera_target = None;
+        self.e.fly_ground_active = false; self.e.fly_visual_only = false; self.e.fly_floor_y = None; self.e.fly_ceiling_y = None; self.e.fly_camera_target = None; self.reset_ground_camera();
         self.e.floor_y = 0.0; self.e.ceiling_y = None;
         self.e.portal_free_mode = false;
         self.delta_buffer = 0.0; self.space_was_down = false;
@@ -318,13 +321,13 @@ impl Game {
     fn enter_start_mode(&mut self, game_mode: i64, y: Option<f64>) {
         let mut sim = Sim::new(&mut self.p, &mut self.g, &mut self.e);
         match game_mode {
-            1 => sim.enter_ship_mode(None, false),
-            2 => sim.enter_ball_mode(Some(y.unwrap_or(30.0))),
-            3 => sim.enter_ufo_mode(None, false),
-            4 => sim.enter_wave_mode(None),
+            1 => sim.enter_ship_mode(None, false, false),
+            2 => sim.enter_ball_mode(Some(y.unwrap_or(30.0)), false),
+            3 => sim.enter_ufo_mode(None, false, false),
+            4 => sim.enter_wave_mode(None, false),
             5 => sim.enter_robot_mode(false),
-            6 => sim.enter_spider_mode(None, false),
-            7 => sim.enter_swing_mode(None, false),
+            6 => sim.enter_spider_mode(None, false, false),
+            7 => sim.enter_swing_mode(None, false, false),
             _ => {}
         }
         self.log.extend(sim.log);
@@ -334,7 +337,7 @@ impl Game {
     pub fn restart(&mut self, speed_key: i64, game_mode: i64, start_x: f64) {
         self.reset_objects();
         self.reset_rotate(); self.reset_spawn(); self.reset_move(); self.reset_stop(); self.reset_follow_y(); self.reset_follow();
-        self.reset_toggle(); self.reset_on_death(); self.reset_touch(); self.reset_pickup(); self.reset_count(); self.reset_collision(); self.reset_instant_count(); self.reset_time_warp();
+        self.reset_toggle(); self.reset_on_death(); self.reset_touch(); self.reset_pickup(); self.reset_count(); self.reset_collision(); self.reset_instant_count(); self.reset_generic(false);
         self.check_toggle(0.0); self.check_pickup(0.0); self.check_count(0.0); self.check_collision_triggers(0.0); self.check_instant_count(0.0);
         self.check_on_death(0.0); self.check_touch_triggers(0.0);
         self.physics_frame = 0.0;
@@ -360,15 +363,16 @@ impl Game {
         }
         let mut e = Env::default();
         e.manage_layer = true;
+        e.has_level_events = true;
         let mut trig = crate::triggers::Triggers::default();
         trig.phase_limit = u32::MAX;
         trig.time_warp = 1.0;
         trig.meta = cols.iter().map(|c| crate::triggers::ColMeta {
             groups: Vec::new(), init_x: c.x, init_y: c.y, init_rot: if c.rotation_degrees == 0.0 || c.rotation_degrees.is_nan() { 0.0 } else { c.rotation_degrees },
-            toggled: Default::default(), sec: crate::triggers::section_index(c.x),
+            toggled: Default::default(), sec: crate::triggers::section_index(c.x), init_wh: None,
         }).collect();
         let disabled = vec![false; cols.len()];
-        Game { cm: crate::colors::ColorManager::new(327424.0, 64511.0), channel_blending: Default::default(), channel_blending_initial: Default::default(), ldm: false, settings: Default::default(), practice_mode: false, checkpoints: Vec::new(), screen_width: 1138.0, end_x_pos: 0.0, end_portal_game_y: 240.0, camera_x: -419.0, camera_y: 0.0, level_won: false, end_camera_override: false, end_cam: None, death_timer: 0.0, death_sound_played: false, new_best_shown: false, had_new_best: false, last_percent: 0.0, best_percent: 0.0, total_deaths: 0.0, respawn_delay: 1.0, start_pos_index: None, mirror: Default::default(), coins: Default::default(), beasts: Default::default(), sp: Default::default(), mb: Default::default(), speed_hack: 1.0, start: StartOptions::default(), start_positions: Vec::new(), show_hitboxes: false, hitbox_trail_on: false, hitboxes_on_death: false, hitbox_trail: [Vec::new(), Vec::new()], p: Player::default(), p2: Player::default(), g: Globals::default(), e, cols, sections, sections_len, disabled, trig, fx: Default::default(), delta_buffer: 0.0, space_was_down: false, physics_frame: 0.0, log: Vec::new(), vlog: Vec::new() }
+        Game { cm: crate::colors::ColorManager::new(327424.0, 64511.0), channel_blending: Default::default(), channel_blending_initial: Default::default(), ldm: false, settings: Default::default(), practice_mode: false, checkpoints: Vec::new(), screen_width: 1138.0, end_x_pos: 0.0, end_portal_game_y: 240.0, camera_x: -419.0, camera_y: 0.0, follow_camera_y: None, rotate_gameplay_enabled: true, sideways_proxies: Default::default(), level_won: false, end_camera_override: false, end_cam: None, death_timer: 0.0, death_sound_played: false, new_best_shown: false, had_new_best: false, last_percent: 0.0, best_percent: 0.0, total_deaths: 0.0, respawn_delay: 1.0, start_pos_index: None, mirror: Default::default(), coins: Default::default(), beasts: Default::default(), sp: Default::default(), mb: Default::default(), speed_hack: 1.0, start: StartOptions::default(), start_positions: Vec::new(), show_hitboxes: false, hitbox_trail_on: false, hitboxes_on_death: false, hitbox_trail: [Vec::new(), Vec::new()], p: Player::default(), p2: Player::default(), g: Globals::default(), e, cols, sections, sections_len, disabled, trig, fx: Default::default(), delta_buffer: 0.0, space_was_down: false, physics_frame: 0.0, log: Vec::new(), vlog: Vec::new() }
     }
 
     /// Everything the level provides to the simulation: colliders (with their groups) and triggers.
@@ -379,11 +383,13 @@ impl Game {
         let objects = crate::level::filter_coins(crate::level::normalize_teleport_portals(level.objects.clone()), official);
         let mut cols: Vec<Col> = Vec::new();
         let mut groups: Vec<Vec<i64>> = Vec::new();
+        let mut toggle_blocks: std::collections::BTreeMap<usize, crate::collider::ToggleBlock> = Default::default();
         for o in &objects {
             if let Some(list) = crate::collider::spawn_colliders(o) {
                 for c in list.iter().filter(|c| !c.placeholder) {
+                    if let Some(tb) = c.toggle { toggle_blocks.insert(cols.len(), tb); }
                     cols.push(Col::from_collider(c, cols.len() as f64));
-                    groups.push(crate::triggers::object_groups(&o.groups));
+                    groups.push(if c.toggle.is_some() { Vec::new() } else { crate::triggers::object_groups(&o.groups) });
                 }
             }
         }
@@ -402,12 +408,14 @@ impl Game {
             }
         }
         let mut g = Game::new(cols);
+        g.trig.gen.toggle_blocks = toggle_blocks;
         g.coins.link = coin_link;
         for (i, gr) in groups.into_iter().enumerate() {
             for &gid in &gr { g.trig.group_cols.entry(gid).or_default().push(i); }
             g.trig.meta[i].groups = gr;
         }
         g.trig.l = crate::triggers::build_lists(&objects);
+        { let mut gs = std::mem::take(&mut g.trig.gen); crate::generic::build_generic_extras(&mut g.trig.l, &mut gs); g.trig.gen = gs; }
         g.sp_load(&objects);
         g.settings = crate::settings::LevelSettings::parse(&level.settings);
         for (ch, c) in &g.settings.initial_colors { g.cm.set_initial_color(*ch, *c); }
@@ -418,7 +426,7 @@ impl Game {
         g.channel_blending_initial = g.channel_blending.clone();
         let mut last_x = 0.0f64;
         for o in &objects {
-            if matches!(crate::objects::object_from_id(o.id.unwrap_or(0)), Some(d) if d.ty == Some("trigger")) { continue; }
+            if crate::objects::is_trigger_branch(o.id.unwrap_or(0)) { continue; }
             let wx = o.x * 2.0;
             if wx > last_x { last_x = wx; }
         }
@@ -437,7 +445,6 @@ impl Game {
             }
         }
         g.start_positions.sort_by(|a, b| (a.x - b.x).partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal));
-        g.trig.touch_holding = vec![false; g.trig.l.touches.len()];
         g
     }
 
@@ -490,8 +497,7 @@ impl Game {
         let pwx = self.e.player_world_x;
         let pl = self.player(second);
         let size = if pl.is_mini { 18.0 } else { 30.0 };
-        for idx in self.nearby(pwx) {
-            let o = &self.cols[idx];
+        for o in &self.near_cols(pwx) {
             if o.ty != 6.0 { continue; }
             let activated = if second { o.act_dual } else { o.act_main };
             if !o.multi_activate && activated { continue; }
@@ -514,11 +520,74 @@ impl Game {
 
     fn update_jump(&mut self, second: bool, dt: f64) {
         self.e.orb_touch = self.scan_orb_touch(second);
-        let near: Vec<Col> = self.nearby(self.e.player_world_x).into_iter().map(|i| self.cols[i].clone()).collect();
+        let near = self.near_cols(self.e.player_world_x);
         self.sim_for(second, |sim| sim.update_jump(dt, &near));
     }
 
+    pub fn sync_floor_ceiling(&mut self) {
+        if self.trig.gen.gameplay_sideways {
+            self.e.floor_y = -1e9;
+            self.e.ceiling_y = None;
+        } else {
+            self.e.floor_y = if self.e.fly_ground_active { if self.e.fly_visual_only { 0.0 } else { self.e.fly_floor_y.unwrap_or(f64::NAN) } } else { 0.0 };
+            self.e.ceiling_y = self.e.fly_ceiling_y;
+        }
+    }
+
+    fn near_cols(&self, world_x: f64) -> Vec<Col> {
+        if self.trig.gen.gameplay_sideways { self.nearby(self.trig.gen.sideways_world_x).into_iter().map(|i| self.sideways_proxy(i)).collect() }
+        else { self.nearby(world_x).into_iter().map(|i| self.cols[i].clone()).collect() }
+    }
+
+    fn swap_sideways_frame(&mut self) {
+        std::mem::swap(&mut self.e.player_world_x, &mut self.p.y);
+        self.e.in_sideways_step = !self.e.in_sideways_step;
+    }
+
+    fn sideways_proxy(&self, i: usize) -> Col {
+        let col = &self.cols[i];
+        let mut p = col.clone();
+        if let Some(own) = self.sideways_proxies.get(&i) {
+            p.dash_hold_main = own.dash_hold_main; p.dash_hold_dual = own.dash_hold_dual; p.ee_toggle_press = own.ee_toggle_press;
+            p.secret_completed = own.secret_completed; p.user_completed = own.user_completed;
+        }
+        p.x = col.y;
+        p.y = col.x;
+        let rot = col.rotation_degrees;
+        if col.ty != crate::pcol::type_code("slope") && (rot % 180.0).abs() == 90.0 {
+            p.w = col.w; p.h = col.h; p.rotation_degrees = 0.0;
+        } else {
+            p.w = col.h; p.h = col.w; p.rotation_degrees = -rot;
+        }
+        p.hypo_ax = col.hypo_ay; p.hypo_ay = col.hypo_ax;
+        p.hypo_bx = col.hypo_by; p.hypo_by = col.hypo_bx;
+        p.right_ax = col.right_ay; p.right_ay = col.right_ax;
+        p
+    }
+
+    fn check_collisions_sideways(&mut self, second: bool, offset: f64) {
+        let idxs = self.nearby(self.trig.gen.sideways_world_x);
+        let mut near: Vec<Col> = idxs.iter().map(|&i| self.sideways_proxy(i)).collect();
+        let final_idx = self.sim_for(second, |sim| {
+            sim.cands = Vec::new();
+            sim.near_idx = idxs.clone();
+            sim.replace_idx = None;
+            sim.replace_cols = Default::default();
+            sim.check_collisions(offset, &mut near);
+            std::mem::take(&mut sim.near_idx)
+        });
+        self.sync_floor_ceiling();
+        for (k, &i) in final_idx.iter().enumerate() {
+            if let Some(c) = near.get(k) {
+                let src = &mut self.cols[i];
+                src.act_main = c.act_main; src.act_dual = c.act_dual; src.activated = c.activated;
+                self.sideways_proxies.insert(i, c.clone());
+            }
+        }
+    }
+
     fn check_collisions(&mut self, second: bool, offset: f64) {
+        if self.trig.gen.gameplay_sideways { self.check_collisions_sideways(second, offset); return; }
         let piece_width = offset + self.g.center_x;
         let idxs = self.nearby(piece_width);
         let mut near: Vec<Col> = idxs.iter().map(|&i| self.cols[i].clone()).collect();
@@ -562,6 +631,8 @@ impl Game {
     /// `_pushButton`
     pub fn push_button(&mut self) {
         if self.p.is_dead { return; }
+        self.p.press_count = Some(self.p.press_count.unwrap_or(0.0) + 1.0);
+        self.p2.press_count = Some(self.p2.press_count.unwrap_or(0.0) + 1.0);
         self.p.up_key_down = true;
         self.p.up_key_pressed = true;
         self.p.queued_hold = true;
@@ -611,7 +682,6 @@ impl Game {
     /// `_releaseButton`
     pub fn release_button(&mut self) {
         for p in [&mut self.p, &mut self.p2] {
-            p.spider_orb_input_locked = false;
             p.robot_touched_pad = true;
             p.up_key_down = false;
             p.up_key_pressed = false;
@@ -624,7 +694,7 @@ impl Game {
     pub(crate) fn slide_quantize(&mut self, delta_ms: f64) -> f64 { self.quantize_delta(delta_ms) }
     pub fn quantize_delta_pub(&mut self, delta_ms: f64) -> f64 { self.quantize_delta(delta_ms) }
     fn quantize_delta(&mut self, delta_ms: f64) -> f64 {
-        let speed = if self.speed_hack == 0.0 || self.speed_hack.is_nan() { 1.0 } else { self.speed_hack };
+        let speed = (if self.speed_hack == 0.0 || self.speed_hack.is_nan() { 1.0 } else { self.speed_hack }) * (if self.trig.time_warp == 0.0 || self.trig.time_warp.is_nan() { 1.0 } else { self.trig.time_warp });
         let buf = (delta_ms * speed) / 1000.0 + self.delta_buffer;
         let mut n = crate::physics::js_round(buf / U);
         if n < 0.0 { n = 0.0; }
@@ -659,11 +729,18 @@ impl Game {
         if sub_steps > 60.0 { sub_steps = 60.0; }
         let sub_delta = if sub_steps > 0.0 { quantized / sub_steps } else { 0.0 };
         let vertical = sub_delta * D;
-        let horizontal = sub_delta * self.g.player_speed * D;
+        let trigger_direction = if self.trig.gen.direction < 0.0 { -1.0 } else { 1.0 };
+        let horizontal = sub_delta * self.g.player_speed * D * trigger_direction;
         let initial_y = self.p.y;
         let initial_y2 = self.p2.y;
         let mut i = 0.0;
         while i < sub_steps {
+            let sideways_step = self.trig.gen.gameplay_sideways && !self.e.is_dual;
+            if self.trig.gen.gameplay_sideways || self.e.floor_y == -1e9 { self.sync_floor_ceiling(); }
+            if sideways_step {
+                self.trig.gen.sideways_world_x = self.e.player_world_x;
+                self.swap_sideways_frame();
+            }
             self.p.last_y = self.p.y;
             self.physics_frame += 1.0;
             self.e.physics_tick = (if self.e.physics_tick == 0.0 || self.e.physics_tick.is_nan() { 0.0 } else { self.e.physics_tick }) + 1.0;
@@ -687,6 +764,7 @@ impl Game {
             }
             if self.e.is_dual && self.p.is_dead && !self.p2.is_dead { self.sim_for(false, |s| s.kill_secondary()); }
             self.e.player_world_x += horizontal;
+            if sideways_step { self.swap_sideways_frame(); }
             if self.e.is_dual && !self.p2.is_dead {
                 {
                     let p2 = &mut self.p2;
@@ -783,10 +861,26 @@ impl<'a> Sim<'a> {
 impl Game {
     /// `_updateCameraY(delta, snap)`
     pub fn update_camera_y(&mut self, delta: f64, snap: bool) {
+        let zoom = if self.trig.gen.zoom == 0.0 || self.trig.gen.zoom.is_nan() { 1.0 } else { self.trig.gen.zoom };
+        let min_y = if zoom != 1.0 { 640.0 / 2.0 * (1.0 / zoom - 1.0) } else { 0.0 };
         let mut piece = self.camera_y;
         let mut target = piece;
+        let p = &self.p;
         if let Some(t) = self.e.fly_camera_target {
             target = t;
+        } else if self.trig.gen.free_mode_camera && (p.is_flying || p.is_ufo || p.is_wave || p.is_ball || p.is_swing || p.is_spider) {
+            let padding = self.trig.gen.free_cam_padding;
+            let margin = 2.0 * (160.0 - ((160.0 - 32.0) * padding + 30.0));
+            let center = piece - 180.0 + 320.0;
+            let y = p.y;
+            if y > center + margin { target = y - 320.0 - margin + 180.0; }
+            else if y < center - margin { target = y - 320.0 + margin + 180.0; }
+            let easing = self.trig.gen.free_cam_easing;
+            if !snap && delta != 0.0 {
+                piece = if easing > 1.0 { piece + (target - piece) / (easing / delta) } else { target };
+                self.camera_y = crate::triggers::js_max(min_y, piece);
+                return;
+            }
         } else {
             let y = self.p.y;
             let (up, down) = (140.0, 80.0);
@@ -795,18 +889,98 @@ impl Game {
                 if y > center + down { target = y - 320.0 - down + 180.0; } else if y < center - up { target = y - 320.0 + up + 180.0; }
             } else if y > center + up { target = y - 320.0 - up + 180.0; } else if y < center - down { target = y - 320.0 + down + 180.0; }
         }
-        if target < 0.0 { target = 0.0; }
+        if target < min_y { target = min_y; }
         if snap { self.camera_y = target; }
         else if delta != 0.0 {
             piece += (target - piece) / (10.0 / delta);
-            if piece < 0.0 { piece = 0.0; }
+            if piece < min_y { piece = min_y; }
             self.camera_y = piece;
+        }
+    }
+
+    pub fn camera_y_block(&mut self, q: f64) {
+        if let Some(fy) = self.follow_camera_y { if self.trig.gen.static_camera.is_some() { self.camera_y = fy; } }
+        self.camera_y -= self.trig.gen.applied_camera_offset_y;
+        self.camera_y -= self.trig.gen.applied_gameplay_offset_y;
+        self.update_camera_y(q, false);
+        self.trig.gen.applied_camera_offset_y = crate::triggers::or0(self.trig.gen.camera_offset.1);
+        self.camera_y += self.trig.gen.applied_camera_offset_y;
+        self.trig.gen.applied_gameplay_offset_y = crate::triggers::or0(self.trig.gen.gameplay_offset.1);
+        self.camera_y += self.trig.gen.applied_gameplay_offset_y;
+        self.apply_static_camera(q);
+        self.apply_camera_edges();
+    }
+
+    fn camera_anchor(&self, gid: i64) -> Option<(f64, f64)> {
+        if !(gid > 0) { return None; }
+        if let Some(&(x, y)) = self.trig.l.camera_guides.get(&gid) { return Some((x, y)); }
+        let (cx, cy) = self.group_center_pub(gid);
+        if cx == 0.0 && cy == 0.0 { return None; }
+        Some((cx, 460.0 - cy))
+    }
+
+    pub fn apply_camera_edges(&mut self) {
+        let edges = match &self.trig.gen.camera_edges { Some(e) => e.clone(), None => return };
+        let zoom = if self.trig.gen.zoom == 0.0 || self.trig.gen.zoom.is_nan() { 1.0 } else { self.trig.gen.zoom };
+        let half_w = self.screen_width / 2.0 / zoom;
+        let half_h = 640.0 / 2.0 / zoom;
+        let pos = |k: i64| edges.get(&k).and_then(|&g| self.camera_anchor(g));
+        let (left, right, top, bottom) = (pos(1), pos(2), pos(3), pos(4));
+        if let Some(r) = right { self.camera_x = crate::triggers::js_min(self.camera_x, r.0 - self.screen_width / 2.0 - half_w); }
+        if let Some(l) = left { self.camera_x = crate::triggers::js_max(self.camera_x, l.0 - self.screen_width / 2.0 + half_w); }
+        if let Some(t) = top { self.camera_y = crate::triggers::js_min(self.camera_y, t.1 + 180.0 - 320.0 - half_h); }
+        if let Some(b) = bottom { self.camera_y = crate::triggers::js_max(self.camera_y, b.1 + 180.0 - 320.0 + half_h); }
+    }
+
+    pub fn apply_static_camera(&mut self, delta: f64) {
+        let active = matches!(&self.trig.gen.static_camera, Some(c) if c.x.is_some() || c.y.is_some());
+        if !active { self.follow_camera_y = None; return; }
+        self.follow_camera_y = Some(self.camera_y);
+        let seconds = delta / 60.0;
+        for is_x in [true, false] {
+            let st = { let c = self.trig.gen.static_camera.as_ref().unwrap(); if is_x { c.x.clone() } else { c.y.clone() } };
+            let mut st = match st { Some(s) => s, None => continue };
+            let follow = if is_x { self.camera_x } else { self.camera_y };
+            if !st.last.map_or(false, |v| v.is_finite()) { st.last = Some(follow); }
+            if !st.exiting {
+                let anchor = self.camera_anchor(st.group);
+                let (gx, gy) = match anchor {
+                    Some(a) => a,
+                    None => {
+                        let c = self.trig.gen.static_camera.as_mut().unwrap();
+                        if is_x { c.x = None; } else { c.y = None; }
+                        continue;
+                    }
+                };
+                st.target = if is_x { gx - self.screen_width / 2.0 } else { gy - 320.0 + 180.0 };
+                if !st.from.map_or(false, |v| v.is_finite()) { st.from = Some(follow); }
+            }
+            st.elapsed += seconds;
+            let (dur, et, er) = { let t = &self.trig.l.generics[st.trig]; (t.duration, t.easing_type, t.easing_rate) };
+            let s = if dur > 0.0 && !st.instant { crate::triggers::easing(et as f64, er, crate::triggers::js_min(st.elapsed / dur, 1.0)) } else { 1.0 };
+            let last = st.last.unwrap();
+            let value;
+            let mut clear = false;
+            if st.exiting {
+                value = last + (follow - last) * s;
+                if s >= 1.0 { clear = true; }
+            } else {
+                let from = st.from.unwrap();
+                value = from + (st.target - from) * s;
+            }
+            st.last = Some(value);
+            let c = self.trig.gen.static_camera.as_mut().unwrap();
+            let slot = if is_x { &mut c.x } else { &mut c.y };
+            *slot = if clear { None } else { Some(st) };
+            if is_x { self.camera_x = value; } else { self.camera_y = value; }
         }
     }
 
     /// Sets up the scene state at the start of a level (`_resetGameplayState`).
     pub fn reset_gameplay_state(&mut self) {
         self.clear_hitbox_trails();
+        self.trig.gen.sideways_world_x = 0.0;
+        self.e.in_sideways_step = false;
         self.camera_x = -self.g.center_x;
         self.camera_y = 0.0;
         self.e.player_world_x = 0.0;
@@ -834,11 +1008,9 @@ impl Game {
         if self.fx.menu_mode { self.menu_step(delta_ms); return false; }
         if self.fx.editor_mode { return false; }
         if self.fx.slide.is_some() { self.slide_step(delta_ms); return false; }
-        self.trig.warped_delta = None;
         let restarted = self.update_inner(delta_ms, jump_held);
         if restarted { self.render_restart(); }
-        let render_delta = self.trig.warped_delta.unwrap_or(delta_ms);
-        self.render_step(render_delta);
+        self.render_step(delta_ms);
         restarted
     }
 
@@ -882,15 +1054,13 @@ impl Game {
             }
             return false;
         }
-        let delta_ms = delta_ms * self.trig.time_warp; // `deltaTime *= level._timeWarp` once the frame is known to be a live one
-        self.trig.warped_delta = Some(delta_ms);
         self.animate_sprites(delta_ms);
         let quantized_before = self.delta_buffer;
         let _ = quantized_before;
         let q = self.step_frame_with_delta(delta_ms, jump_held);
         self.coin_pickups();
         if !self.end_camera_override {
-            let offset = self.e.player_world_x - self.g.center_x;
+            let offset = self.e.player_world_x - self.g.center_x + crate::triggers::or0(self.trig.gen.camera_offset.0) + crate::triggers::or0(self.trig.gen.gameplay_offset.0);
             if self.end_x_pos > 0.0 {
                 let max_cam = self.end_x_pos - self.screen_width;
                 if offset >= max_cam - 200.0 {
@@ -908,12 +1078,10 @@ impl Game {
                 self.camera_y = c.from_y + (c.to_y - c.from_y) * p;
             }
         }
-        if !self.end_camera_override { self.update_camera_y(q, false); }
+        if !self.end_camera_override { self.camera_y_block(q); }
         self.update_visibility(self.camera_x);
-        if self.p.is_swing { self.sim_for(false, |s| s.update_swing_rotation(q)); }
-        else if self.p.is_flying { self.sim_for(false, |s| s.update_ship_rotation(q)); }
-        if self.e.is_dual && self.p2.is_swing && !self.p2.is_dead { self.sim_for(true, |s| s.update_swing_rotation(q)); }
-        else if self.e.is_dual && self.p2.is_flying && !self.p2.is_dead { self.sim_for(true, |s| s.update_ship_rotation(q)); }
+        if self.p.is_flying || self.p.is_swing { self.sim_for(false, |s| s.update_ship_rotation(q)); }
+        if self.e.is_dual && (self.p2.is_flying || self.p2.is_swing) && !self.p2.is_dead { self.sim_for(true, |s| s.update_ship_rotation(q)); }
         if self.mirror.enabled { self.step_mirror(delta_ms / 1000.0); }
         false
     }
@@ -933,9 +1101,10 @@ pub struct Checkpoint {
     pub ground: Option<crate::ground::Ground>,
     pub dual: bool, pub dual_mode: &'static str, pub dual_mini: bool, pub dual_y: f64, pub dual_y_velocity: f64, pub dual_gravity_flipped: bool,
     pub dual_on_ground: bool, pub dual_on_ceiling: bool, pub dual_can_jump: bool, pub dual_is_jumping: bool,
-    pub swing_flip_pending: bool, pub swing_gd_accel: bool, pub swing_on_ceiling: bool, pub portal_free_mode: bool,
+    pub swing_gd_accel: bool, pub swing_on_ceiling: bool, pub portal_free_mode: bool,
     pub time_warp: (f64, usize, Vec<i64>), pub dual_bounds_center_y: Option<f64>,
-    pub dual_swing_flip_pending: bool, pub dual_swing_gd_accel: bool, pub dual_swing_was_boosted: bool,
+    pub dual_swing_gd_accel: bool, pub dual_swing_was_boosted: bool,
+    pub gameplay_sideways: bool, pub direction: f64,
 }
 
 impl Game {
@@ -956,9 +1125,9 @@ impl Game {
             fly_camera_target: self.e.fly_camera_target, speed: self.g.player_speed, physics_frame: self.physics_frame, ground: self.fx.ground.clone(),
             dual: self.e.is_dual, dual_mode, dual_mini: p2.is_mini, dual_y: p2.y, dual_y_velocity: p2.y_velocity, dual_gravity_flipped: p2.gravity_flipped,
             dual_on_ground: p2.on_ground, dual_on_ceiling: p2.on_ceiling, dual_can_jump: p2.can_jump, dual_is_jumping: p2.is_jumping,
-            swing_flip_pending: p.swing_flip_pending, swing_gd_accel: p.gd_accel, swing_on_ceiling: p.on_ceiling, portal_free_mode: self.e.portal_free_mode,
+            swing_gd_accel: p.gd_accel, swing_on_ceiling: p.on_ceiling, portal_free_mode: self.e.portal_free_mode,
             time_warp: self.save_time_warp(), dual_bounds_center_y: self.e.dual_bounds_center_y,
-            dual_swing_flip_pending: p2.swing_flip_pending, dual_swing_gd_accel: p2.gd_accel, dual_swing_was_boosted: p2.was_boosted,
+            dual_swing_gd_accel: p2.gd_accel, dual_swing_was_boosted: p2.was_boosted, gameplay_sideways: self.trig.gen.gameplay_sideways, direction: if self.trig.gen.direction == -1.0 { -1.0 } else { 1.0 }
         });
         true
     }
@@ -988,18 +1157,17 @@ impl Game {
         self.p.is_flying = false; self.p.is_ball = false; self.p.is_wave = false; self.p.is_ufo = false; self.p.is_spider = false; self.p.is_robot = false; self.p.is_swing = false;
         {
             let mut sim = Sim::new(&mut self.p, &mut self.g, &mut self.e);
-            if cp.is_swing { sim.enter_swing_mode(None, true); }
-            else if cp.is_flying { sim.enter_ship_mode(None, true); }
-            else if cp.is_ball { sim.enter_ball_mode(None); }
-            else if cp.is_ufo { sim.enter_ufo_mode(None, true); }
-            else if cp.is_wave { sim.enter_wave_mode(None); }
+            if cp.is_swing { sim.enter_swing_mode(None, true, false); }
+            else if cp.is_flying { sim.enter_ship_mode(None, true, false); }
+            else if cp.is_ball { sim.enter_ball_mode(None, false); }
+            else if cp.is_ufo { sim.enter_ufo_mode(None, true, false); }
+            else if cp.is_wave { sim.enter_wave_mode(None, false); }
             else if cp.is_robot { sim.enter_robot_mode(false); }
-            else if cp.is_spider { sim.enter_spider_mode(None, false); }
+            else if cp.is_spider { sim.enter_spider_mode(None, false, false); }
             self.log.extend(sim.log);
         }
         self.p.is_flying = cp.is_flying; self.p.is_ball = cp.is_ball; self.p.is_wave = cp.is_wave; self.p.is_ufo = cp.is_ufo; self.p.is_spider = cp.is_spider; self.p.is_robot = cp.is_robot;
         self.p.is_swing = cp.is_swing;
-        self.p.swing_flip_pending = cp.swing_flip_pending;
         if cp.is_swing {
             self.p.gd_accel = cp.swing_gd_accel; self.p.on_ceiling = cp.swing_on_ceiling; self.p.on_ground = cp.on_ground; self.p.can_jump = cp.can_jump;
             self.p.is_jumping = cp.is_jumping; self.p.was_boosted = cp.was_boosted;
@@ -1019,6 +1187,12 @@ impl Game {
         if let (Some(g), Some(snap)) = (self.fx.ground.as_mut(), cp.ground.as_ref()) { g.copy_state_from(snap); }
         self.e.floor_y = if self.e.fly_ground_active { if self.e.fly_visual_only { 0.0 } else { self.e.fly_floor_y.unwrap_or(f64::NAN) } } else { 0.0 };
         self.e.ceiling_y = self.e.fly_ceiling_y;
+        self.trig.gen.gameplay_sideways = cp.gameplay_sideways;
+        self.trig.gen.direction = cp.direction;
+        self.trig.gen.direction_dirty = true;
+        self.trig.gen.sideways_world_x = 0.0;
+        self.e.in_sideways_step = false;
+        self.sync_floor_ceiling();
         self.g.player_speed = cp.speed;
         if cp.dual {
             self.e.is_dual = false;
@@ -1038,7 +1212,7 @@ impl Game {
             let input = self.p.clone();
             self.sim_for(false, |s| s.copy_input_to_secondary(&input));
             if self.p2.is_swing {
-                self.p2.swing_flip_pending = cp.dual_swing_flip_pending; self.p2.gd_accel = cp.dual_swing_gd_accel; self.p2.was_boosted = cp.dual_swing_was_boosted;
+                self.p2.gd_accel = cp.dual_swing_gd_accel; self.p2.was_boosted = cp.dual_swing_was_boosted;
             }
             self.e.dual_bounds_center_y = Some(cp.dual_bounds_center_y.unwrap_or((cp.fly_floor_y.unwrap_or(0.0) + cp.fly_ceiling_y.unwrap_or(0.0)) / 2.0));
             self.sim_for(false, |s| s.ensure_dual_fly_bounds());

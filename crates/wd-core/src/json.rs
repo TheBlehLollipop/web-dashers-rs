@@ -19,7 +19,7 @@ pub fn str_lit(s: &str) -> String {
 
 /// Numbers that are NaN or infinite become `null`, like `JSON.stringify`.
 pub fn num(v: f64) -> String {
-    if v.is_finite() { format!("{}", v) } else { "null".to_string() }
+    if v == 0.0 { "0".to_string() } else if v.is_finite() { format!("{}", v) } else { "null".to_string() }
 }
 
 pub fn opt(v: Option<i64>) -> String {

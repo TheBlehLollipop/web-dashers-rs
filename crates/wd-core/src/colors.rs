@@ -244,8 +244,6 @@ impl ColorManager {
             1005 => channel_hex_to_rgb(self.main_color),
             1006 => channel_hex_to_rgb(self.secondary_color),
             1007 => light_bg_color(self.get_color(FS), if depth < 8 { self.get_color_depth(1005, depth + 1) } else { channel_hex_to_rgb(self.main_color) }),
-            1 => channel_hex_to_rgb(self.main_color),
-            2 => channel_hex_to_rgb(self.secondary_color),
             1009 => self.get_color_depth(GS, depth + 1),
             _ => rgb(255.0, 255.0, 255.0),
         }

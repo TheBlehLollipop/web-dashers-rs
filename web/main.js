@@ -757,6 +757,7 @@ async function main() {
       } else GL.quad([0, 0, W, 0, W, H, 0, H], buf[22], 1, false);
       endfx.drawBack(GL);
       const base0 = 40 + tiles, ox0 = -camX + shakeX, oy0 = camY + shakeY;
+      GL.view(buf[38] || 1, buf[39] || 0);
       for (let k = 0; k < count; k++) {
         const o = base0 + k * 12;
         if (buf[o + 10] === 1) break;
@@ -764,6 +765,7 @@ async function main() {
         GL.frame(fr, buf[o + 1] + ox0, buf[o + 2] + oy0, buf[o + 3], buf[o + 4], buf[o + 5], buf[o + 6], buf[o + 7], buf[o + 8], buf[o + 9]);
       }
       endfx.drawWall(ox0, oy0, w.wd_game_scene(5), w.wd_game_scene(4), iconColor("iconMainColor", "04FF00"), !menuMode && !w.wd_ui_menu_active() && !window.WD_EDITOR_ON, GL.frame);
+      GL.view(1, 0);
       GL.end();
     } else {
     // background
@@ -808,6 +810,8 @@ async function main() {
       return buf;
     }
     const ox = -camX + shakeX, oy = camY + shakeY;
+    const vz = buf[38] || 1, va = buf[39] || 0, vOn = vz !== 1 || va !== 0;
+    if (vOn) { ctx.save(); ctx.translate(W / 2, H / 2); ctx.rotate(va * Math.PI / 180); ctx.scale(vz, vz); ctx.translate(-W / 2, -H / 2); }
     let i = 0;
     for (; i < count; i++) {
       const o = base + i * 12;
@@ -826,6 +830,7 @@ async function main() {
     }
     pv.drawTop(ox, oy);
     drawEdMarks(ox, oy);
+    if (vOn) ctx.restore();
     // ground
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over";
     if (groundImg) {
